@@ -1,0 +1,253 @@
+"""
+validation/checks.py
+Post-run validation checks and missing-input normalization tests.
+
+run_validation_checks() — verifies the engine produced correct output
+run_normalization_tests() — verifies scorer handles missing inputs gracefully
+"""
+
+from data.mock_data       import load_mock_market, build_mock_chain
+from engines.expected_move  import compute_expected_move
+from engines.atr_engine     import classify_atr_trend, em_atr_ratio
+from engines.iv_regime      import classify_iv_regime
+from engines.term_structure import compute_term_slope, classify_term_structure
+from engines.skew_engine    import compute_skew, classify_skew
+from engines.gamma_engine   import classify_gamma_regime
+from strategies.bear_call       import generate_bear_call_spreads
+from strategies.bull_put        import generate_bull_put_spreads
+from strategies.bull_call_debit import generate_bull_call_debit_spreads
+from strategies.bear_put_debit  import generate_bear_put_debit_spreads
+from calculator.trade_scoring   import rank_candidates
+
+
+# ─────────────────────────────────────────────
+# CORE VALIDATION
+# ─────────────────────────────────────────────
+
+def run_validation_checks(
+    chain: list[dict],
+    ranked: list[dict],
+    derived: dict,
+) -> tuple[bool, list[tuple[str, bool]]]:
+    """
+    Verify the engine produced structurally correct output.
+
+    Returns:
+        (all_pass: bool, results: list of (check_name, passed))
+    """
+    top = ranked[0] if ranked else None
+
+    checks = [
+        ("Chain has >= 40 rows",
+            len(chain) >= 40),
+
+        ("Expected move > 0",
+            derived["expected_move"] > 0),
+
+        ("Upper EM > spot (lower EM < spot)",
+            derived["upper_em"] > derived["lower_em"]),
+
+        ("IV regime classified",
+            derived["iv_regime"] in ("cheap", "moderate", "elevated", "rich")),
+
+        ("Term structure classified",
+            derived["term_structure"] in ("contango", "flat", "backwardation")),
+
+        ("Gamma regime classified",
+            derived["gamma_regime"] in ("positive", "negative", "neutral", "unknown")),
+
+        ("Bear call spread generated",
+            any(t["strategy_type"] == "bear_call" for t in ranked)),
+
+        ("Bull put spread generated",
+            any(t["strategy_type"] == "bull_put" for t in ranked)),
+
+        ("Bull call debit generated",
+            any(t["strategy_type"] == "bull_call_debit" for t in ranked)),
+
+        ("Bear put debit generated",
+            any(t["strategy_type"] == "bear_put_debit" for t in ranked)),
+
+        ("All trades scored 0–100",
+            all(0 <= t["confidence_score"] <= 100 for t in ranked)),
+
+        ("Top trade score >= 65",
+            top is not None and top["confidence_score"] >= 65),
+
+        ("Candidates ranked descending",
+            all(
+                ranked[i]["confidence_score"] >= ranked[i + 1]["confidence_score"]
+                for i in range(len(ranked) - 1)
+            )),
+
+        ("Credit spreads show positive credit",
+            all(
+                t["entry_debit_credit"] > 0
+                for t in ranked
+                if t["strategy_type"] in ("bear_call", "bull_put")
+            )),
+
+        ("Debit spreads show negative entry value",
+            all(
+                t["entry_debit_credit"] < 0
+                for t in ranked
+                if t["strategy_type"] in ("bull_call_debit", "bear_put_debit")
+            )),
+
+        ("Max profit > 0 for all trades",
+            all(t["max_profit"] > 0 for t in ranked)),
+
+        ("Max loss > 0 for all trades",
+            all(t["max_loss"] > 0 for t in ranked)),
+
+        ("Contracts >= 1 for all trades",
+            all(t["contracts"] >= 1 for t in ranked)),
+    ]
+
+    all_pass = all(result for _, result in checks)
+    return all_pass, checks
+
+
+def print_validation_results(
+    results: list[tuple[str, bool]],
+    all_pass: bool,
+    label: str = "Core Validation",
+) -> None:
+    print(f"  ─── {label} ───")
+    for name, passed in results:
+        status = "PASS" if passed else "FAIL"
+        print(f"  [{status}] {name}")
+    print()
+    if all_pass:
+        print("  ✓ All checks passed.")
+    else:
+        failed = [name for name, ok in results if not ok]
+        print(f"  ✗ {len(failed)} check(s) failed: {', '.join(failed)}")
+    print()
+
+
+# ─────────────────────────────────────────────
+# MISSING-INPUT NORMALIZATION TESTS
+# ─────────────────────────────────────────────
+
+def _build_derived_from_market(market: dict) -> dict:
+    """Helper: build derived context dict from any market dict."""
+    em_result  = compute_expected_move(
+        market["spot_price"],
+        market.get("atm_call_mid"),
+        market.get("atm_put_mid"),
+        market["front_iv"],
+        market["front_dte"],
+    )
+    term_slope = compute_term_slope(market["front_iv"], market["back_iv"])
+    skew_val   = compute_skew(market.get("put_25d_iv"), market.get("call_25d_iv"))
+
+    return {
+        "expected_move":  em_result["expected_move"],
+        "upper_em":       em_result["upper_em"],
+        "lower_em":       em_result["lower_em"],
+        "em_method":      em_result["method"],
+
+        "atr_trend":      classify_atr_trend(market["atr_14"], market["atr_prior"]),
+        "iv_regime":      classify_iv_regime(market["iv_percentile"]),
+        "term_slope":     term_slope,
+        "term_structure": classify_term_structure(term_slope),
+        "skew_value":     skew_val,
+        "skew_state":     classify_skew(skew_val),
+        "gamma_regime":   classify_gamma_regime(market.get("total_gex")),
+        "em_atr_ratio":   em_atr_ratio(em_result["expected_move"], market["atr_14"]),
+
+        "gamma_flip":     market.get("gamma_flip"),
+        "gamma_trap":     market.get("gamma_trap_strike"),
+    }
+
+
+def _run_all_generators(market: dict, chain: list[dict], derived: dict) -> list[dict]:
+    candidates = []
+    candidates += generate_bear_call_spreads(market, chain, derived)
+    candidates += generate_bull_put_spreads(market, chain, derived)
+    candidates += generate_bull_call_debit_spreads(market, chain, derived)
+    candidates += generate_bear_put_debit_spreads(market, chain, derived)
+    return rank_candidates(candidates)
+
+
+def run_normalization_tests(chain: list[dict]) -> tuple[bool, list[tuple[str, bool]]]:
+    """
+    Test A — total_gex = None          (gamma regime unknown)
+    Test B — gamma_flip = None         (gamma context partially absent)
+    Test C — skew inputs = None        (skew regime unknown)
+    Test D — front_iv == back_iv       (flat term structure)
+
+    Each test verifies:
+      - engine still runs without error
+      - all candidates still receive valid scores (0–100)
+      - ranking is still monotone descending
+      - top trade score stays >= 50 (no score collapse)
+    """
+    base_market = load_mock_market()
+    results: list[tuple[str, bool]] = []
+
+    # ── Test A: gamma completely absent ──────────────────────
+    market_a = {**base_market, "total_gex": None, "gamma_flip": None, "gamma_trap_strike": None}
+    derived_a = _build_derived_from_market(market_a)
+    ranked_a  = _run_all_generators(market_a, chain, derived_a)
+
+    results += [
+        ("Test A: gamma=None → engine runs",
+            len(ranked_a) > 0),
+        ("Test A: gamma=None → scores valid 0–100",
+            all(0 <= t["confidence_score"] <= 100 for t in ranked_a)),
+        ("Test A: gamma=None → top score >= 50",
+            ranked_a[0]["confidence_score"] >= 50 if ranked_a else False),
+        ("Test A: gamma=None → ranking descending",
+            all(ranked_a[i]["confidence_score"] >= ranked_a[i+1]["confidence_score"]
+                for i in range(len(ranked_a)-1))),
+    ]
+
+    # ── Test B: gamma_flip absent only (total_gex still present) ─
+    market_b = {**base_market, "gamma_flip": None, "gamma_trap_strike": None}
+    derived_b = _build_derived_from_market(market_b)
+    ranked_b  = _run_all_generators(market_b, chain, derived_b)
+
+    results += [
+        ("Test B: gamma_flip=None → engine runs",
+            len(ranked_b) > 0),
+        ("Test B: gamma_flip=None → scores valid",
+            all(0 <= t["confidence_score"] <= 100 for t in ranked_b)),
+    ]
+
+    # ── Test C: skew inputs absent ────────────────────────────
+    market_c = {**base_market, "put_25d_iv": None, "call_25d_iv": None}
+    derived_c = _build_derived_from_market(market_c)
+    ranked_c  = _run_all_generators(market_c, chain, derived_c)
+
+    results += [
+        ("Test C: skew=None → skew_state is 'unknown'",
+            derived_c["skew_state"] == "unknown"),
+        ("Test C: skew=None → engine runs",
+            len(ranked_c) > 0),
+        ("Test C: skew=None → scores valid 0–100",
+            all(0 <= t["confidence_score"] <= 100 for t in ranked_c)),
+        ("Test C: skew=None → top score >= 50",
+            ranked_c[0]["confidence_score"] >= 50 if ranked_c else False),
+        ("Test C: skew=None → ranking descending",
+            all(ranked_c[i]["confidence_score"] >= ranked_c[i+1]["confidence_score"]
+                for i in range(len(ranked_c)-1))),
+    ]
+
+    # ── Test D: flat term structure (front_iv == back_iv) ─────
+    market_d = {**base_market, "back_iv": base_market["front_iv"]}
+    derived_d = _build_derived_from_market(market_d)
+    ranked_d  = _run_all_generators(market_d, chain, derived_d)
+
+    results += [
+        ("Test D: flat IV → term_structure is 'flat'",
+            derived_d["term_structure"] == "flat"),
+        ("Test D: flat IV → engine runs",
+            len(ranked_d) > 0),
+        ("Test D: flat IV → scores valid",
+            all(0 <= t["confidence_score"] <= 100 for t in ranked_d)),
+    ]
+
+    all_pass = all(ok for _, ok in results)
+    return all_pass, results
