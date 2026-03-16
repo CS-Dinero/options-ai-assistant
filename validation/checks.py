@@ -6,7 +6,8 @@ run_validation_checks() — verifies the engine produced correct output
 run_normalization_tests() — verifies scorer handles missing inputs gracefully
 """
 
-from data.mock_data       import load_mock_market, build_mock_chain
+from data.mock_data          import load_mock_market, build_mock_chain
+from engines.context_builder import build_derived as _cb_build_derived
 from engines.expected_move  import compute_expected_move
 from engines.atr_engine     import classify_atr_trend, em_atr_ratio
 from engines.iv_regime      import classify_iv_regime
@@ -102,6 +103,20 @@ def run_validation_checks(
 
         ("Contracts >= 1 for all trades",
             all(t["contracts"] >= 1 for t in ranked)),
+
+        # Gamma engine checks
+        ("GEX by strike is dict",
+            isinstance(derived.get("gex_by_strike"), dict)),
+        ("Total GEX numeric or None",
+            derived.get("total_gex") is None or isinstance(derived.get("total_gex"), (int, float))),
+        ("Gamma flip numeric or None",
+            derived.get("gamma_flip") is None or isinstance(derived.get("gamma_flip"), (int, float))),
+        ("Gamma trap numeric or None",
+            derived.get("gamma_trap") is None or isinstance(derived.get("gamma_trap"), (int, float))),
+        ("Gamma regime classified",
+            derived.get("gamma_regime") in ("positive", "negative", "neutral", "unknown")),
+        ("Mock mode gamma regime resolved",
+            derived.get("gamma_regime") != "unknown"),
     ]
 
     all_pass = all(result for _, result in checks)
@@ -130,36 +145,9 @@ def print_validation_results(
 # MISSING-INPUT NORMALIZATION TESTS
 # ─────────────────────────────────────────────
 
-def _build_derived_from_market(market: dict) -> dict:
-    """Helper: build derived context dict from any market dict."""
-    em_result  = compute_expected_move(
-        market["spot_price"],
-        market.get("atm_call_mid"),
-        market.get("atm_put_mid"),
-        market["front_iv"],
-        market["front_dte"],
-    )
-    term_slope = compute_term_slope(market["front_iv"], market["back_iv"])
-    skew_val   = compute_skew(market.get("put_25d_iv"), market.get("call_25d_iv"))
-
-    return {
-        "expected_move":  em_result["expected_move"],
-        "upper_em":       em_result["upper_em"],
-        "lower_em":       em_result["lower_em"],
-        "em_method":      em_result["method"],
-
-        "atr_trend":      classify_atr_trend(market["atr_14"], market["atr_prior"]),
-        "iv_regime":      classify_iv_regime(market["iv_percentile"]),
-        "term_slope":     term_slope,
-        "term_structure": classify_term_structure(term_slope),
-        "skew_value":     skew_val,
-        "skew_state":     classify_skew(skew_val),
-        "gamma_regime":   classify_gamma_regime(market.get("total_gex")),
-        "em_atr_ratio":   em_atr_ratio(em_result["expected_move"], market["atr_14"]),
-
-        "gamma_flip":     market.get("gamma_flip"),
-        "gamma_trap":     market.get("gamma_trap_strike"),
-    }
+def _build_derived_from_market(market: dict, chain: list | None = None) -> dict:
+    """Helper: build derived context using context_builder (no circular imports)."""
+    return _cb_build_derived(market, chain)
 
 
 def _run_all_generators(market: dict, chain: list[dict], derived: dict) -> list[dict]:
@@ -189,7 +177,7 @@ def run_normalization_tests(chain: list[dict]) -> tuple[bool, list[tuple[str, bo
 
     # ── Test A: gamma completely absent ──────────────────────
     market_a = {**base_market, "total_gex": None, "gamma_flip": None, "gamma_trap_strike": None}
-    derived_a = _build_derived_from_market(market_a)
+    derived_a = _build_derived_from_market(market_a, chain)
     ranked_a  = _run_all_generators(market_a, chain, derived_a)
 
     results += [
@@ -206,7 +194,7 @@ def run_normalization_tests(chain: list[dict]) -> tuple[bool, list[tuple[str, bo
 
     # ── Test B: gamma_flip absent only (total_gex still present) ─
     market_b = {**base_market, "gamma_flip": None, "gamma_trap_strike": None}
-    derived_b = _build_derived_from_market(market_b)
+    derived_b = _build_derived_from_market(market_b, chain)
     ranked_b  = _run_all_generators(market_b, chain, derived_b)
 
     results += [
@@ -218,7 +206,7 @@ def run_normalization_tests(chain: list[dict]) -> tuple[bool, list[tuple[str, bo
 
     # ── Test C: skew inputs absent ────────────────────────────
     market_c = {**base_market, "put_25d_iv": None, "call_25d_iv": None}
-    derived_c = _build_derived_from_market(market_c)
+    derived_c = _build_derived_from_market(market_c, chain)
     ranked_c  = _run_all_generators(market_c, chain, derived_c)
 
     results += [
@@ -237,7 +225,7 @@ def run_normalization_tests(chain: list[dict]) -> tuple[bool, list[tuple[str, bo
 
     # ── Test D: flat term structure (front_iv == back_iv) ─────
     market_d = {**base_market, "back_iv": base_market["front_iv"]}
-    derived_d = _build_derived_from_market(market_d)
+    derived_d = _build_derived_from_market(market_d, chain)
     ranked_d  = _run_all_generators(market_d, chain, derived_d)
 
     results += [

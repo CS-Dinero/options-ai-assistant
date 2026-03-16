@@ -43,7 +43,7 @@ from engines.atr_engine     import classify_atr_trend, em_atr_ratio
 from engines.iv_regime      import classify_iv_regime
 from engines.term_structure import compute_term_slope, classify_term_structure
 from engines.skew_engine    import compute_skew, classify_skew
-from engines.gamma_engine   import classify_gamma_regime
+from engines.context_builder import build_derived
 from strategies.bear_call       import generate_bear_call_spreads
 from strategies.bull_put        import generate_bull_put_spreads
 from strategies.bull_call_debit import generate_bull_call_debit_spreads
@@ -116,42 +116,7 @@ def colored_badge(label: str, color: str) -> str:
 # DERIVED BUILDER
 # ─────────────────────────────────────────────
 
-def build_derived(market: dict) -> dict:
-    em_result = compute_expected_move(
-        spot         = market["spot_price"],
-        atm_call_mid = market.get("atm_call_mid"),
-        atm_put_mid  = market.get("atm_put_mid"),
-        iv_percent   = market.get("front_iv", 16.0),
-        dte          = market.get("front_dte", 7),
-    )
-    term_slope = compute_term_slope(
-        market.get("front_iv", 16.0),
-        market.get("back_iv",  16.0),
-    )
-    skew_val = compute_skew(
-        market.get("put_25d_iv"),
-        market.get("call_25d_iv"),
-    )
-    return {
-        "expected_move": em_result["expected_move"],
-        "upper_em":      em_result["upper_em"],
-        "lower_em":      em_result["lower_em"],
-        "em_method":     em_result["method"],
-        "atr_trend":      classify_atr_trend(
-                              market.get("atr_14", 3.0),
-                              market.get("atr_prior", 3.0)),
-        "iv_regime":      classify_iv_regime(market.get("iv_percentile", 50.0)),
-        "term_slope":     term_slope,
-        "term_structure": classify_term_structure(term_slope),
-        "skew_value":     skew_val,
-        "skew_state":     classify_skew(skew_val),
-        "gamma_regime":   classify_gamma_regime(market.get("total_gex")),
-        "em_atr_ratio":   em_atr_ratio(
-                              em_result["expected_move"],
-                              market.get("atr_14", 3.0)),
-        "gamma_flip":     market.get("gamma_flip"),
-        "gamma_trap":     market.get("gamma_trap_strike"),
-    }
+
 
 
 # ─────────────────────────────────────────────
@@ -501,7 +466,7 @@ def main():
             return
 
     # Compute analytics
-    derived    = build_derived(market)
+    derived    = build_derived(market, chain)
     candidates = generate_candidates(market, chain, derived)
 
     # Market summary
@@ -531,9 +496,10 @@ def main():
         )
     with vis_col2:
         render_gamma_wall(
-            chain       = chain,
-            spot        = market["spot_price"],
-            gamma_flip  = derived.get("gamma_flip"),
+            chain          = chain,
+            spot           = market["spot_price"],
+            gamma_flip     = derived.get("gamma_flip"),
+            gex_by_strike  = derived.get("gex_by_strike"),
         )
 
     st.divider()

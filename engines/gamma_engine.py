@@ -1,98 +1,200 @@
 """
 engines/gamma_engine.py
-GEX (Gamma Exposure) regime classification.
+Real Gamma Exposure (GEX) engine.
 
-MVP: classify from pre-computed total_gex value.
-Phase 2: compute full GEX surface from option chain data.
+Formula (institutional standard):
+    GEX = gamma * open_interest * 100 * spot_price
+    calls = positive (dealer long gamma → pinning)
+    puts  = negative (dealer short gamma → acceleration)
+
+Outputs:
+    gex_by_strike  — net GEX aggregated per strike
+    total_gex      — sum of all signed GEX
+    gamma_flip     — strike where cumulative GEX crosses zero
+    gamma_trap     — strike with largest positive GEX cluster (pinning magnet)
+    gamma_regime   — positive / negative / neutral / unknown
+
+All functions are None-safe. Missing gamma or OI rows are skipped silently.
 """
 
-from typing import Optional
+from __future__ import annotations
+from typing import Dict, List, Optional
 
+
+# ─────────────────────────────────────────────
+# PER-ROW GEX
+# ─────────────────────────────────────────────
+
+def compute_signed_gex(row: dict, spot_price: float) -> Optional[float]:
+    """
+    Compute signed GEX for one option contract row.
+
+    Returns None if gamma, OI, or option_type are missing/invalid.
+    Callers should skip None results silently.
+    """
+    gamma       = row.get("gamma")
+    oi          = row.get("open_interest")
+    option_type = row.get("option_type")
+
+    if gamma is None or oi in (None, 0) or option_type not in ("call", "put"):
+        return None
+
+    try:
+        raw_gex = float(gamma) * float(oi) * 100.0 * float(spot_price)
+    except (TypeError, ValueError):
+        return None
+
+    return raw_gex if option_type == "call" else -raw_gex
+
+
+# ─────────────────────────────────────────────
+# CHAIN AGGREGATION
+# ─────────────────────────────────────────────
+
+def aggregate_gex_by_strike(
+    chain: List[dict],
+    spot_price: float,
+) -> Dict[float, float]:
+    """
+    Aggregate signed GEX across all chain rows, keyed by strike.
+
+    Rows with missing gamma or OI are silently skipped.
+    Returns a strike-sorted dict: {strike: net_gex}
+    """
+    gex_by_strike: Dict[float, float] = {}
+
+    for row in chain:
+        strike = row.get("strike")
+        if strike is None:
+            continue
+
+        signed_gex = compute_signed_gex(row, spot_price)
+        if signed_gex is None:
+            continue
+
+        k = float(strike)
+        gex_by_strike[k] = gex_by_strike.get(k, 0.0) + signed_gex
+
+    return dict(sorted(gex_by_strike.items()))
+
+
+def compute_total_gex(gex_by_strike: Dict[float, float]) -> Optional[float]:
+    """
+    Sum all net GEX values across strikes.
+
+    Returns None if no data available (triggers scorer normalization).
+    Positive → dealers net long gamma → range-bound / mean-reverting.
+    Negative → dealers net short gamma → trending / volatile.
+    """
+    if not gex_by_strike:
+        return None
+    return sum(gex_by_strike.values())
+
+
+# ─────────────────────────────────────────────
+# GAMMA FLIP
+# ─────────────────────────────────────────────
+
+def estimate_gamma_flip(gex_by_strike: Dict[float, float]) -> Optional[float]:
+    """
+    Estimate the gamma flip level: strike where net GEX crosses zero.
+
+    Uses linear interpolation between adjacent strikes where sign changes.
+    The flip level is the regime boundary:
+        price above flip → typically positive gamma → range-bound
+        price below flip → typically negative gamma → trend-prone
+
+    Returns None if fewer than 2 strikes or no sign change found.
+    """
+    if len(gex_by_strike) < 2:
+        return None
+
+    strikes = sorted(gex_by_strike.keys())
+
+    for i in range(len(strikes) - 1):
+        s1, s2 = strikes[i], strikes[i + 1]
+        g1, g2 = gex_by_strike[s1], gex_by_strike[s2]
+
+        if g1 == 0:
+            return s1
+
+        if g1 * g2 < 0:
+            span = g2 - g1
+            if span == 0:
+                return s1
+            frac = abs(g1) / abs(span)
+            return round(s1 + frac * (s2 - s1), 2)
+
+    return None
+
+
+# ─────────────────────────────────────────────
+# GAMMA TRAP
+# ─────────────────────────────────────────────
+
+def identify_gamma_trap(gex_by_strike: Dict[float, float]) -> Optional[float]:
+    """
+    Identify the gamma trap: strike with the largest positive GEX.
+
+    The gamma trap is the strike where dealer hedging creates the strongest
+    gravitational pull — price tends to pin or return here.
+
+    Returns None if no positive GEX strikes exist.
+    """
+    if not gex_by_strike:
+        return None
+
+    positive = {k: v for k, v in gex_by_strike.items() if v > 0}
+    if not positive:
+        return None
+
+    return max(positive, key=lambda k: positive[k])
+
+
+# ─────────────────────────────────────────────
+# REGIME CLASSIFIER
+# ─────────────────────────────────────────────
 
 def classify_gamma_regime(total_gex: Optional[float]) -> str:
     """
-    Classify dealer gamma positioning from total signed GEX.
-
-    Positive GEX: dealers are net long gamma.
-        - Dealers buy dips / sell rips to delta-hedge.
-        - Market tends toward mean-reversion and range compression.
-        - Favors credit spreads, iron condors, calendars.
-
-    Negative GEX: dealers are net short gamma.
-        - Dealers must chase moves to delta-hedge.
-        - Market tends toward amplified directional moves.
-        - Favors debit spreads and directional structures.
+    Classify overall gamma regime from total GEX.
 
     Returns:
-        "positive" — total_gex > +1B
-        "negative" — total_gex < -1B
-        "neutral"  — within ±1B
-        "unknown"  — total_gex is None (triggers score normalization)
+        "positive" — dealers net long gamma → mean-reversion, credit spreads
+        "negative" — dealers net short gamma → trending, debit spreads
+        "neutral"  — near-zero GEX → balanced
+        "unknown"  — no data (scorer normalizes via reweighting)
     """
     if total_gex is None:
         return "unknown"
-    if total_gex > 1e9:
+    if total_gex > 1e6:       # threshold avoids noise near zero
         return "positive"
-    elif total_gex < -1e9:
+    if total_gex < -1e6:
         return "negative"
     return "neutral"
 
 
 # ─────────────────────────────────────────────
-# Phase 2 stubs — chain-based GEX calculation
-# These are not used in MVP but define the interface
-# for when you want to compute GEX from live chain data.
+# CONVENIENCE: FULL PIPELINE
 # ─────────────────────────────────────────────
 
-def compute_signed_gex(
-    spot: float,
-    gamma: float,
-    open_interest: int,
-    option_type: str,
-) -> float:
+def compute_gamma_context(chain: list[dict], spot_price: float) -> dict:
     """
-    GEX contribution for a single option contract.
+    Run the complete GEX pipeline from a chain and spot price.
 
-    GEX_call = +gamma * OI * 100 * spot
-    GEX_put  = -gamma * OI * 100 * spot
+    Returns a dict with all gamma fields ready to merge into derived context.
+    All values are None-safe — missing data produces 'unknown' regime.
     """
-    sign = 1 if option_type == "call" else -1
-    return sign * gamma * open_interest * 100 * spot
+    gex_by_strike = aggregate_gex_by_strike(chain, spot_price)
+    total_gex     = compute_total_gex(gex_by_strike)
+    gamma_flip    = estimate_gamma_flip(gex_by_strike)
+    gamma_trap    = identify_gamma_trap(gex_by_strike)
+    gamma_regime  = classify_gamma_regime(total_gex)
 
-
-def aggregate_gex_by_strike(chain: list[dict], spot: float) -> dict:
-    """
-    Sum signed GEX at each strike.
-    Returns: {strike: net_gex_value}
-    """
-    gex_map: dict[float, float] = {}
-    for row in chain:
-        k   = row["strike"]
-        gex = compute_signed_gex(spot, row["gamma"], row["open_interest"], row["option_type"])
-        gex_map[k] = gex_map.get(k, 0.0) + gex
-    return dict(sorted(gex_map.items()))
-
-
-def estimate_gamma_flip(gex_by_strike: dict) -> Optional[float]:
-    """
-    Estimate gamma flip level: strike where cumulative GEX crosses zero.
-    Returns the strike closest to the zero crossing.
-    """
-    strikes = sorted(gex_by_strike.keys())
-    cumulative = 0.0
-    for strike in strikes:
-        prev = cumulative
-        cumulative += gex_by_strike[strike]
-        if prev < 0 < cumulative or prev > 0 > cumulative:
-            return strike
-    return None
-
-
-def identify_gamma_trap(gex_by_strike: dict) -> Optional[float]:
-    """
-    Gamma trap: strike with the largest absolute GEX concentration.
-    Price tends to pin or gravity-pull toward this strike.
-    """
-    if not gex_by_strike:
-        return None
-    return max(gex_by_strike, key=lambda k: abs(gex_by_strike[k]))
+    return {
+        "gex_by_strike": gex_by_strike,
+        "total_gex":     total_gex,
+        "gamma_flip":    gamma_flip,
+        "gamma_trap":    gamma_trap,
+        "gamma_regime":  gamma_regime,
+    }

@@ -88,6 +88,7 @@ def render_gamma_wall(
     chain: list[dict],
     spot: float,
     gamma_flip: float | None = None,
+    gex_by_strike: dict | None = None,
     top_n_strikes: int = 20,
 ):
     """
@@ -99,11 +100,26 @@ def render_gamma_wall(
     """
     st.subheader("🧱 Gamma Structure")
 
-    if not chain:
+    if not chain and not gex_by_strike:
         st.caption("No chain data available.")
         return
 
-    rows = build_gamma_wall_dataframe(chain, spot)
+    # Prefer real GEX from engine; fall back to OI proxy from chain
+    if gex_by_strike:
+        rows = [
+            {
+                "strike":    k,
+                "net_gex":   v,
+                "call_oi":   0,
+                "put_oi":    0,
+                "total_oi":  0,
+                "has_gamma": True,
+            }
+            for k, v in gex_by_strike.items()
+            if abs(k - spot) / spot <= 0.15
+        ]
+    else:
+        rows = build_gamma_wall_dataframe(chain, spot)
 
     if not rows:
         st.caption("No strikes within ±15% of spot found in chain.")
