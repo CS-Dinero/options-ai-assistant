@@ -429,7 +429,8 @@ def render_trade_card(rank: int, t: dict, derived: dict):
 
         # Risk row
         rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-        rc1.metric("Max Profit",   f"${t['max_profit']:.0f}")
+        max_p = t['max_profit']
+        rc1.metric("Max Profit",   f"${max_p:.0f}" if max_p is not None else "Variable")
         rc2.metric("Max Loss",     f"${t['max_loss']:.0f}")
         rc3.metric("Target Exit",  f"${t['target_exit_value']:.2f}")
         rc4.metric("Stop Level",   f"${t['stop_value']:.2f}")
