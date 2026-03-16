@@ -171,7 +171,7 @@ def render_gamma_wall(
     # Gamma flip line if available
     if gamma_flip:
         fig.add_hline(
-            y         = f"${gamma_flip:.0f}",
+            y         = gamma_flip,
             line_dash = "dash",
             line_color = "#f59e0b",
             line_width = 1.5,
