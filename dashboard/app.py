@@ -15,10 +15,12 @@ DATA_MODE is controlled by the sidebar dropdown.
 import sys
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # ── Path setup — works locally and on Streamlit Cloud ────────────────────────
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+load_dotenv(ROOT / ".env")
 
 import streamlit as st
 try:
@@ -46,6 +48,8 @@ from strategies.bear_call       import generate_bear_call_spreads
 from strategies.bull_put        import generate_bull_put_spreads
 from strategies.bull_call_debit import generate_bull_call_debit_spreads
 from strategies.bear_put_debit  import generate_bear_put_debit_spreads
+from strategies.calendar        import generate_calendar_candidates
+from strategies.diagonal        import generate_diagonal_candidates
 from calculator.trade_scoring   import rank_candidates, get_score_breakdown
 from config.settings            import SCORE_STRONG, SCORE_TRADABLE
 from dashboard.components.strategy_bars import render_strategy_probability_bars
@@ -247,6 +251,8 @@ def generate_candidates(market, chain, derived):
     candidates += generate_bull_put_spreads(market, chain, derived)
     candidates += generate_bull_call_debit_spreads(market, chain, derived)
     candidates += generate_bear_put_debit_spreads(market, chain, derived)
+    candidates += generate_calendar_candidates(market, chain, derived)
+    candidates += generate_diagonal_candidates(market, chain, derived)
     return rank_candidates(candidates)
 
 

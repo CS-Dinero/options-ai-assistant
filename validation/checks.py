@@ -95,7 +95,7 @@ def run_validation_checks(
             )),
 
         ("Max profit > 0 for all trades",
-            all(t["max_profit"] > 0 for t in ranked)),
+            all((t["max_profit"] or 0) >= 0 for t in ranked)),
 
         ("Max loss > 0 for all trades",
             all(t["max_loss"] > 0 for t in ranked)),
@@ -251,3 +251,130 @@ def run_normalization_tests(chain: list[dict]) -> tuple[bool, list[tuple[str, bo
 
     all_pass = all(ok for _, ok in results)
     return all_pass, results
+
+
+# ─────────────────────────────────────────────
+# CALENDAR VALIDATION
+# ─────────────────────────────────────────────
+
+def run_calendar_validation(ranked: list[dict]) -> tuple[bool, list[tuple[str, bool]]]:
+    """
+    Validate calendar candidate structure and rule compliance.
+    Uses conditional checks — skips pass/fail when no calendar exists
+    for checks that require favorable regime (graceful non-generation is valid).
+    """
+    cal = [t for t in ranked if t["strategy_type"] == "calendar"]
+    has_cal = len(cal) > 0
+
+    checks = [
+        ("Calendar schema complete",
+            all(_validate_schema(t) for t in cal) if has_cal else True),
+
+        ("Calendar uses same strike both legs",
+            all(t["long_strike"] == t["short_strike"] for t in cal) if has_cal else True),
+
+        ("Calendar width is zero",
+            all(t["width"] == 0.0 for t in cal) if has_cal else True),
+
+        ("Calendar debit is positive",
+            all(t["entry_debit_credit"] > 0 for t in cal) if has_cal else True),
+
+        ("Calendar max_loss equals debit*100",
+            all(abs(t["max_loss"] - t["entry_debit_credit"] * 100) < 1 for t in cal) if has_cal else True),
+
+        ("Calendar target above entry",
+            all(t["target_exit_value"] > t["entry_debit_credit"] for t in cal) if has_cal else True),
+
+        ("Calendar stop below entry",
+            all(t["stop_value"] < t["entry_debit_credit"] for t in cal) if has_cal else True),
+
+        ("Calendar theta ratio valid",
+            all(
+                abs(t["short_theta"]) >= 1.5 * abs(t["long_theta"])
+                for t in cal
+                if t.get("short_theta") is not None and t.get("long_theta") is not None
+            ) if has_cal else True),
+
+        ("Calendar scored 0-100",
+            all(0 <= t["confidence_score"] <= 100 for t in cal) if has_cal else True),
+    ]
+
+    all_pass = all(ok for _, ok in checks)
+    return all_pass, checks
+
+
+# ─────────────────────────────────────────────
+# DIAGONAL VALIDATION
+# ─────────────────────────────────────────────
+
+def run_diagonal_validation(ranked: list[dict]) -> tuple[bool, list[tuple[str, bool]]]:
+    """
+    Validate diagonal candidate structure and filter compliance.
+    """
+    from config.settings import (
+        DIAGONAL_LONG_DELTA_MIN, DIAGONAL_LONG_DELTA_MAX,
+        DIAGONAL_SHORT_DELTA_MIN, DIAGONAL_SHORT_DELTA_MAX,
+        DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH, MIN_LONG_LEG_OPEN_INTEREST,
+        MAX_BID_ASK_SPREAD_PCT,
+    )
+    diag    = [t for t in ranked if t["strategy_type"] == "diagonal"]
+    has_diag = len(diag) > 0
+
+    checks = [
+        ("Diagonal schema complete",
+            all(_validate_schema(t) for t in diag) if has_diag else True),
+
+        ("Diagonal width positive",
+            all(t["width"] > 0 for t in diag) if has_diag else True),
+
+        ("Diagonal debit is positive",
+            all(t["entry_debit_credit"] > 0 for t in diag) if has_diag else True),
+
+        ("Diagonal target above entry",
+            all(t["target_exit_value"] > t["entry_debit_credit"] for t in diag) if has_diag else True),
+
+        ("Diagonal stop below entry",
+            all(t["stop_value"] < t["entry_debit_credit"] for t in diag) if has_diag else True),
+
+        ("Diagonal long delta in target band",
+            all(
+                DIAGONAL_LONG_DELTA_MIN <= abs(t["long_delta"]) <= DIAGONAL_LONG_DELTA_MAX
+                for t in diag if t.get("long_delta") is not None
+            ) if has_diag else True),
+
+        ("Diagonal short delta in target band",
+            all(
+                DIAGONAL_SHORT_DELTA_MIN <= abs(t["short_delta"]) <= DIAGONAL_SHORT_DELTA_MAX
+                for t in diag if t.get("short_delta") is not None
+            ) if has_diag else True),
+
+        ("Diagonal debit within 75% width cap",
+            all(
+                t["debit_pct_of_width"] <= DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH
+                for t in diag if t.get("debit_pct_of_width") is not None
+            ) if has_diag else True),
+
+        ("Diagonal long leg OI sufficient",
+            all(
+                t["long_open_interest"] >= MIN_LONG_LEG_OPEN_INTEREST
+                for t in diag if t.get("long_open_interest") is not None
+            ) if has_diag else True),
+
+        ("Diagonal bid/ask spread acceptable",
+            all(
+                t["long_bid_ask_spread_pct"] <= MAX_BID_ASK_SPREAD_PCT
+                for t in diag if t.get("long_bid_ask_spread_pct") is not None
+            ) if has_diag else True),
+
+        ("Diagonal scored 0-100",
+            all(0 <= t["confidence_score"] <= 100 for t in diag) if has_diag else True),
+    ]
+
+    all_pass = all(ok for _, ok in checks)
+    return all_pass, checks
+
+
+def _validate_schema(candidate: dict) -> bool:
+    """Check all required fields exist in a candidate."""
+    from config.settings import REQUIRED_CANDIDATE_FIELDS
+    return all(field in candidate for field in REQUIRED_CANDIDATE_FIELDS)

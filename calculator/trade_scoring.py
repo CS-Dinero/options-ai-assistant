@@ -34,6 +34,8 @@ def score_iv_regime(iv_regime: str, strategy_type: str) -> float:
         return credit_map.get(iv_regime, 0.5)
     elif strategy_type in ("bull_call_debit", "bear_put_debit"):
         return debit_map.get(iv_regime, 0.5)
+    elif strategy_type in ("calendar", "diagonal"):
+        return neutral_map.get(iv_regime, 0.5)   # calendars/diagonals prefer cheap-moderate
     return neutral_map.get(iv_regime, 0.5)
 
 
@@ -53,6 +55,10 @@ def score_gamma_regime(gamma_regime: str, strategy_type: str) -> Optional[float]
         return credit_map.get(gamma_regime, 0.5)
     elif strategy_type in ("bull_call_debit", "bear_put_debit"):
         return debit_map.get(gamma_regime, 0.5)
+    elif strategy_type == "calendar":
+        return credit_map.get(gamma_regime, 0.6)  # calendar wants range-bound = positive gamma
+    elif strategy_type == "diagonal":
+        return debit_map.get(gamma_regime, 0.6)   # diagonal wants trending = negative gamma
     return 0.60
 
 
@@ -103,6 +109,10 @@ def score_term_structure(term_structure: str, strategy_type: str) -> float:
         return credit_map.get(term_structure, 0.50)
     elif strategy_type in ("bull_call_debit", "bear_put_debit"):
         return debit_map.get(term_structure, 0.50)
+    elif strategy_type in ("calendar", "diagonal"):
+        # calendars and diagonals strongly prefer contango (back > front IV)
+        cal_diag_map = {"contango": 1.00, "flat": 0.70, "backwardation": 0.20}
+        return cal_diag_map.get(term_structure, 0.50)
     return 0.65
 
 
@@ -118,6 +128,10 @@ def score_atr_regime(atr_trend: str, strategy_type: str) -> float:
         return credit_map.get(atr_trend, 0.50)
     elif strategy_type in ("bull_call_debit", "bear_put_debit"):
         return debit_map.get(atr_trend, 0.50)
+    elif strategy_type in ("calendar", "diagonal"):
+        # calendars prefer flat ATR; diagonals prefer moderate trend
+        cal_diag_map = {"flat": 1.00, "falling": 0.80, "rising": 0.55}
+        return cal_diag_map.get(atr_trend, 0.65)
     return 0.65
 
 

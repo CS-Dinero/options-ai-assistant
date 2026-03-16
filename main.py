@@ -22,6 +22,8 @@ Switching to live Tradier data:
 """
 
 import sys
+from dotenv import load_dotenv
+load_dotenv()
 
 # ── Data mode switch — only thing you change between mock and live ────────────
 DATA_MODE = "mock"    # "mock" | "tradier" | "massive"
@@ -40,6 +42,8 @@ from strategies.bear_call       import generate_bear_call_spreads
 from strategies.bull_put        import generate_bull_put_spreads
 from strategies.bull_call_debit import generate_bull_call_debit_spreads
 from strategies.bear_put_debit  import generate_bear_put_debit_spreads
+from strategies.calendar        import generate_calendar_candidates
+from strategies.diagonal        import generate_diagonal_candidates
 
 from calculator.trade_scoring import rank_candidates
 
@@ -53,6 +57,8 @@ from validation.checks import (
     run_validation_checks,
     print_validation_results,
     run_normalization_tests,
+    run_calendar_validation,
+    run_diagonal_validation,
 )
 
 
@@ -335,9 +341,8 @@ def generate_all_candidates(
     candidates += generate_bull_put_spreads(market, chain, derived)
     candidates += generate_bull_call_debit_spreads(market, chain, derived)
     candidates += generate_bear_put_debit_spreads(market, chain, derived)
-    # Phase 3:
-    # candidates += generate_calendar_candidates(market, chain, derived)
-    # candidates += generate_diagonal_candidates(market, chain, derived)
+    candidates += generate_calendar_candidates(market, chain, derived)
+    candidates += generate_diagonal_candidates(market, chain, derived)
     return rank_candidates(candidates)
 
 
@@ -421,7 +426,13 @@ def main(symbol: str = "SPY", run_tests: bool = True) -> list[dict]:
             norm_pass, norm_results = run_normalization_tests(chain)
             print_validation_results(norm_results, norm_pass, label="Normalization Tests")
 
-            if all_pass and norm_pass:
+            cal_pass, cal_results   = run_calendar_validation(ranked)
+            print_validation_results(cal_results, cal_pass, label="Calendar Validation")
+
+            diag_pass, diag_results = run_diagonal_validation(ranked)
+            print_validation_results(diag_results, diag_pass, label="Diagonal Validation")
+
+            if all_pass and norm_pass and cal_pass and diag_pass:
                 print("  ✓ Engine validated. Ready for live data.")
             else:
                 print("  ✗ Failures detected — review before going live.")

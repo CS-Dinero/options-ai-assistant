@@ -78,7 +78,8 @@ def print_trade(rank: int, t: dict) -> None:
         print(f"  Width       : ${t['width']:.0f}")
         print(f"  Debit       : ${abs(credit):.2f}  (${abs(credit)*100:.0f}/contract)")
 
-    print(f"  Max Profit  : ${t['max_profit']:.0f}/contract")
+    mp = f"${t['max_profit']:.0f}" if t.get('max_profit') is not None else "varies (time spread)"
+    print(f"  Max Profit  : {mp}/contract")
     print(f"  Max Loss    : ${t['max_loss']:.0f}/contract")
     print(f"  Target Exit : ${t['target_exit_value']:.2f}")
     print(f"  Stop Level  : ${t['stop_value']:.2f}")
