@@ -53,7 +53,7 @@ Response shape per result:
 
 import os
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Optional
 
 try:
@@ -79,7 +79,7 @@ def _load_from_streamlit_secrets():
             pass
 
 _load_from_streamlit_secrets()
-MASSIVE_BASE_URL = "https://api.polygon.io"
+MASSIVE_BASE_URL = "https://api.massive.com"
 
 # Chain snapshot: max rows per page (API max = 250)
 PAGE_LIMIT = 250
@@ -292,14 +292,6 @@ def _normalize_result(raw: dict, symbol: str) -> Optional[dict]:
     ask      = _safe_float_zero(quote.get("ask"))
     midpoint = _safe_float(quote.get("midpoint"))
 
-    # When market is closed (weekend/after-hours) bid/ask are 0.
-    # Fall back to previous session close so strategies can still run.
-    mid = _compute_mid(bid, ask, midpoint)
-    if mid == 0.0:
-        prev_close = _safe_float(day.get("close"))
-        if prev_close and prev_close > 0:
-            mid = prev_close
-
     # IV: Massive returns as decimal — convert to percentage
     iv_raw = _safe_float(raw.get("implied_volatility"))
     iv     = round(iv_raw * 100, 4) if iv_raw else None
@@ -312,7 +304,7 @@ def _normalize_result(raw: dict, symbol: str) -> Optional[dict]:
         "strike":        strike,
         "bid":           bid,
         "ask":           ask,
-        "mid":           mid,
+        "mid":           _compute_mid(bid, ask, midpoint),
         "delta":         _safe_float(greeks.get("delta")),
         "gamma":         _safe_float(greeks.get("gamma")),
         "theta":         _safe_float(greeks.get("theta")),
@@ -363,55 +355,55 @@ def get_expirations(symbol: str, session=None) -> list[str]:
     """
     Return sorted list of available option expiration dates for a symbol.
 
-    Strategy: generate the next 16 weekly Fridays, then probe each with a
-    1-row fetch to confirm chain data exists. Works on all plan tiers and
-    reliably discovers expirations well beyond the current week.
+    Strategy: fetch a small slice of the chain (calls only, limit=250)
+    and extract unique expiration dates. More reliable than a reference
+    endpoint and stays within free-tier rate limits.
     """
-    today = date.today()
-    days_to_friday = (4 - today.weekday()) % 7
-    first_friday   = today + timedelta(days=days_to_friday if days_to_friday else 7)
+    results = _get_paginated(
+        f"/v3/snapshot/options/{symbol.upper()}",
+        params={
+            "contract_type": "call",
+            "limit":          PAGE_LIMIT,
+        },
+        session=session,
+    )
 
-    candidates = [
-        (first_friday + timedelta(weeks=i)).isoformat()
-        for i in range(16)
-    ]
+    dates = set()
+    for r in results:
+        exp = (r.get("details") or {}).get("expiration_date")
+        if exp:
+            dates.add(exp)
 
-    available = []
-    for exp in candidates:
-        try:
-            payload = _get(
-                f"/v3/snapshot/options/{symbol.upper()}",
-                params={"expiration_date": exp, "contract_type": "call", "limit": 1},
-                session=session,
-            )
-            if payload.get("results"):
-                available.append(exp)
-                time.sleep(0.2)
-        except MassiveAPIError:
-            continue
-
-    return available
+    return sorted(dates)
 
 
 def get_spot_price(symbol: str, session=None) -> float:
     """
     Return the current spot price for the underlying.
 
-    Uses /v2/aggs/ticker/{symbol}/prev (previous session close).
-    Available on all plan tiers.
+    Uses the Massive stocks snapshot endpoint.
+    Fallback chain: close → open → previous_close → raise
     """
     payload = _get(
-        f"/v2/aggs/ticker/{symbol.upper()}/prev",
+        f"/v2/snapshot/locale/us/markets/stocks/tickers/{symbol.upper()}",
         session=session,
     )
 
-    results = payload.get("results") or []
-    if results:
-        bar = results[0]
-        for key in ("c", "o"):   # close, then open
-            val = _safe_float(bar.get(key))
-            if val and val > 0:
-                return val
+    ticker_data = payload.get("ticker") or {}
+    day         = ticker_data.get("day") or {}
+    prev_day    = ticker_data.get("prevDay") or {}
+
+    for key, src in [("close", day), ("open", day),
+                     ("close", prev_day), ("open", prev_day)]:
+        val = _safe_float(src.get(key))
+        if val and val > 0:
+            return val
+
+    # Last resort: last trade price
+    last_trade = ticker_data.get("lastTrade") or {}
+    val = _safe_float(last_trade.get("p"))
+    if val and val > 0:
+        return val
 
     raise MassiveAPIError(
         f"Could not extract spot price for {symbol} from Massive response."

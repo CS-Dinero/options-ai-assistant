@@ -15,14 +15,16 @@ DATA_MODE is controlled by the sidebar dropdown.
 import sys
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 
 # ── Path setup — works locally and on Streamlit Cloud ────────────────────────
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
-load_dotenv(ROOT / ".env")
 
 import streamlit as st
+try:
+    import plotly
+except ImportError:
+    pass
 
 # ── Page config — must be first Streamlit call ────────────────────────────────
 st.set_page_config(
@@ -46,6 +48,9 @@ from strategies.bull_call_debit import generate_bull_call_debit_spreads
 from strategies.bear_put_debit  import generate_bear_put_debit_spreads
 from calculator.trade_scoring   import rank_candidates, get_score_breakdown
 from config.settings            import SCORE_STRONG, SCORE_TRADABLE
+from dashboard.components.strategy_bars import render_strategy_probability_bars
+from dashboard.components.em_cone       import render_em_cone
+from dashboard.components.gamma_wall    import render_gamma_wall
 
 
 # ─────────────────────────────────────────────
@@ -505,6 +510,29 @@ def main():
             f"Strikes ${strikes[0]:.0f}–${strikes[-1]:.0f} &nbsp;|&nbsp; "
             f"Expirations: {', '.join(exps)}"
         )
+
+    st.divider()
+
+    # ── Section 2: Market Structure Visuals ──────────────────────────────────
+    vis_col1, vis_col2 = st.columns([1, 1])
+    with vis_col1:
+        render_em_cone(
+            spot           = market["spot_price"],
+            expected_move  = derived["expected_move"],
+            top_trade      = candidates[0] if candidates else None,
+            derived        = derived,
+        )
+    with vis_col2:
+        render_gamma_wall(
+            chain       = chain,
+            spot        = market["spot_price"],
+            gamma_flip  = derived.get("gamma_flip"),
+        )
+
+    st.divider()
+
+    # ── Section 3: Strategy Strength ─────────────────────────────────────────
+    render_strategy_probability_bars(candidates)
 
     st.divider()
 

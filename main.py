@@ -22,8 +22,6 @@ Switching to live Tradier data:
 """
 
 import sys
-from dotenv import load_dotenv
-load_dotenv()
 
 # ── Data mode switch — only thing you change between mock and live ────────────
 DATA_MODE = "mock"    # "mock" | "tradier" | "massive"
