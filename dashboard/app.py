@@ -573,3 +573,139 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ─────────────────────────────────────────────
+# TRADE LOG PANEL
+# ─────────────────────────────────────────────
+
+def _render_trade_log_panel(ranked: list[dict], market: dict, derived: dict):
+    """
+    Trade Log section at the bottom of the dashboard.
+
+    Sections:
+      1. Export current scan suggestions to scan_log.csv
+      2. Log a trade as opened (one-click from top candidates)
+      3. View open positions
+      4. Performance summary (closed trades)
+    """
+    logger = TradeLogger()
+
+    with st.expander("📋 Trade Log & Export", expanded=False):
+        tab1, tab2, tab3 = st.tabs(["📤 Export Scan", "📂 Open Trades", "📊 Stats"])
+
+        # ── Tab 1: Export scan suggestions ───────────────────────────────────
+        with tab1:
+            st.markdown("**Log today's AI suggestions to scan_log.csv**")
+            st.caption(
+                "Records every suggestion (taken or not). "
+                "This builds your strategy accuracy dataset over time."
+            )
+
+            if not ranked:
+                st.info("No candidates to export. Run with live or mock data first.")
+            else:
+                for i, t in enumerate(ranked[:3], start=1):
+                    label = f"#{i} {t['strategy_type'].replace('_',' ').title()} — Score {t['confidence_score']}"
+                    col1, col2, col3 = st.columns([4, 1, 1])
+                    with col1:
+                        st.caption(label)
+                    with col2:
+                        if st.button("Log (not taken)", key=f"scan_no_{i}"):
+                            scan_id = logger.log_scan(t, market, derived, taken=False)
+                            st.success(f"Logged {scan_id}")
+                    with col3:
+                        if st.button("Log + Open trade", key=f"scan_yes_{i}"):
+                            scan_id  = logger.log_scan(t, market, derived, taken=True)
+                            trade_id = logger.open_trade(t, market, derived)
+                            st.success(f"Trade {trade_id} opened")
+
+            st.divider()
+            st.markdown("**Download CSVs**")
+            dc1, dc2, dc3 = st.columns(3)
+
+            import io, csv as _csv
+            def _csv_bytes(path):
+                if not path.exists():
+                    return b"No data yet"
+                return path.read_bytes()
+
+            with dc1:
+                st.download_button(
+                    "⬇ trade_log.csv",
+                    data=_csv_bytes(logger.trade_log_path),
+                    file_name="trade_log.csv",
+                    mime="text/csv",
+                )
+            with dc2:
+                st.download_button(
+                    "⬇ scan_log.csv",
+                    data=_csv_bytes(logger.scan_log_path),
+                    file_name="scan_log.csv",
+                    mime="text/csv",
+                )
+            with dc3:
+                st.download_button(
+                    "⬇ position_monitor.csv",
+                    data=_csv_bytes(logger.position_mon_path),
+                    file_name="position_monitor.csv",
+                    mime="text/csv",
+                )
+
+        # ── Tab 2: Open positions ─────────────────────────────────────────────
+        with tab2:
+            open_trades = logger.get_open_trades()
+            if not open_trades:
+                st.info("No open trades logged yet. Use 'Log + Open trade' above.")
+            else:
+                st.caption(f"{len(open_trades)} open position(s)")
+                for t in open_trades:
+                    with st.container():
+                        c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
+                        c1.metric(t["strategy_type"].replace("_", " ").title(),
+                                  f"${t.get('short_strike', '')} / ${t.get('long_strike', '')}")
+                        c2.metric("Entry", f"${t.get('entry_price', '')}")
+                        c3.metric("Target", f"${t.get('target_price', '')}")
+                        c4.metric("Score", t.get("score", ""))
+                        st.caption(
+                            f"Opened {t['date_open']} | "
+                            f"Exp {t.get('short_expiration', '')} | "
+                            f"ID: {t['trade_id']}"
+                        )
+
+                        # Close trade form
+                        with st.form(key=f"close_{t['trade_id']}"):
+                            ec1, ec2, ec3 = st.columns(3)
+                            exit_px  = ec1.number_input("Exit price", value=0.0, step=0.01)
+                            pnl_val  = ec2.number_input("P&L ($)", value=0.0, step=1.0)
+                            reason   = ec3.selectbox("Reason",
+                                ["target_hit", "stop_hit", "expiry", "manual_close", "rolled"])
+                            if st.form_submit_button("Close trade"):
+                                ok = logger.close_trade(
+                                    t["trade_id"], exit_px, pnl_val, reason
+                                )
+                                if ok:
+                                    st.success(f"Trade {t['trade_id']} closed")
+                                    st.rerun()
+                        st.divider()
+
+        # ── Tab 3: Stats ──────────────────────────────────────────────────────
+        with tab3:
+            stats = logger.summary_stats()
+            if stats["total_trades"] == 0:
+                st.info("No closed trades yet. Stats appear after closing your first trade.")
+            else:
+                s1, s2, s3 = st.columns(3)
+                s1.metric("Total Closed", stats["total_trades"])
+                s2.metric("Win Rate",
+                          f"{stats['win_rate']*100:.1f}%" if stats["win_rate"] else "—")
+                s3.metric("Avg P&L", f"${stats['avg_pnl']:.2f}" if stats["avg_pnl"] else "—")
+
+                st.divider()
+                st.markdown("**By Strategy**")
+                for strat, d in stats["by_strategy"].items():
+                    wr = f"{d['win_rate']*100:.1f}%" if d["win_rate"] else "—"
+                    st.caption(
+                        f"{strat.replace('_',' ').title()} — "
+                        f"{d['trades']} trades | Win rate: {wr} | Avg P&L: ${d['avg_pnl']:.2f}"
+                    )
