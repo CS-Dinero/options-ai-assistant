@@ -52,6 +52,7 @@ from strategies.calendar        import generate_calendar_candidates
 from strategies.diagonal        import generate_diagonal_candidates
 from calculator.trade_scoring   import rank_candidates, get_score_breakdown
 from config.settings            import SCORE_STRONG, SCORE_TRADABLE
+from backtest.trade_logger      import TradeLogger
 from dashboard.components.strategy_bars import render_strategy_probability_bars
 from dashboard.components.em_cone       import render_em_cone
 from dashboard.components.gamma_wall    import render_gamma_wall
