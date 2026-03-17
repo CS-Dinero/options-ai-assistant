@@ -139,6 +139,52 @@ def score_atr_regime(atr_trend: str, strategy_type: str) -> float:
 # NORMALIZATION ENGINE
 # ─────────────────────────────────────────────
 
+def score_gamma_trap_location(candidate: dict, derived: dict) -> float:
+    """
+    Bonus score based on where spot sits relative to gamma trap.
+
+    Calendar: rewards trap proximity (pinning aids calendar stability)
+    Diagonal: rewards spot moving AWAY from trap (trend confirmation)
+    Spreads:  mild bonus when trap confirms direction
+
+    Returns 0.0-1.0. Called as an add-on modifier, not a weighted factor.
+    """
+    strategy_type = candidate.get("strategy_type", "")
+    spot_vs_trap  = candidate.get("spot_vs_trap")   # diagonal diagnostic
+    gamma_trap    = derived.get("gamma_trap")
+    spot          = 0  # only used for calendar check via derived
+
+    if strategy_type == "calendar":
+        short_strike = candidate.get("short_strike", 0)
+        if gamma_trap is not None and abs(short_strike - gamma_trap) <= 1.0:
+            return 1.0   # calendar perfectly centered at gamma trap
+        elif gamma_trap is not None:
+            return 0.65  # trap exists but calendar not centered there
+        return 0.50      # no gamma data
+
+    elif strategy_type == "diagonal":
+        if spot_vs_trap is None or spot_vs_trap == "unknown":
+            return 0.60
+        direction = candidate.get("direction", "")
+        if direction == "bull_call_diagonal":
+            if spot_vs_trap == "above_trap":
+                return 0.90   # spot broke above trap — bullish momentum confirmed
+            elif spot_vs_trap == "at_trap":
+                return 0.60   # pinned at trap — trend not yet established
+            else:
+                return 0.40   # below trap — wrong direction for bull diagonal
+        elif direction == "bear_put_diagonal":
+            if spot_vs_trap == "below_trap":
+                return 0.90   # spot below trap — bearish momentum confirmed
+            elif spot_vs_trap == "at_trap":
+                return 0.60
+            else:
+                return 0.40
+        return 0.60
+
+    return 0.60   # neutral for spreads / debit spreads
+
+
 def _normalize_weighted_score(raw_scores: dict[str, Optional[float]]) -> int:
     """
     Weighted sum with proportional redistribution of missing factor weights.

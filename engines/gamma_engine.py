@@ -198,3 +198,67 @@ def compute_gamma_context(chain: list[dict], spot_price: float) -> dict:
         "gamma_trap":    gamma_trap,
         "gamma_regime":  gamma_regime,
     }
+
+
+# ─────────────────────────────────────────────
+# GAMMA TRAP TARGETING HELPERS
+# ─────────────────────────────────────────────
+
+def is_gamma_trap_near_spot(
+    spot_price: float,
+    gamma_trap: Optional[float],
+    expected_move: float,
+    proximity_pct: float = 0.5,
+) -> bool:
+    """
+    Return True if gamma trap is within proximity_pct * EM of spot.
+
+    The default 0.5 EM proximity means: only use the gamma trap as a
+    calendar strike when it's within half the expected move of spot.
+    Beyond that, the trap is too far away to aid short-term pinning.
+
+    Example:
+        spot=520, EM=9, trap=522 → distance=2, threshold=4.5 → True (use trap)
+        spot=520, EM=9, trap=535 → distance=15, threshold=4.5 → False (use ATM)
+    """
+    if gamma_trap is None or expected_move <= 0:
+        return False
+    return abs(gamma_trap - spot_price) <= proximity_pct * expected_move
+
+
+def gamma_trap_distance(
+    spot_price: float,
+    gamma_trap: Optional[float],
+) -> Optional[float]:
+    """
+    Signed distance from spot to gamma trap.
+    Positive = trap above spot (bullish lean).
+    Negative = trap below spot (bearish lean).
+    None = trap unavailable.
+    """
+    if gamma_trap is None:
+        return None
+    return round(gamma_trap - spot_price, 2)
+
+
+def spot_position_vs_trap(
+    spot_price: float,
+    gamma_trap: Optional[float],
+) -> str:
+    """
+    Classify spot position relative to gamma trap.
+
+    Returns:
+        "above_trap"  — spot > trap (price broken through, directional)
+        "at_trap"     — spot within $2 of trap (pinned)
+        "below_trap"  — spot < trap (bearish lean)
+        "unknown"     — no trap data
+    """
+    if gamma_trap is None:
+        return "unknown"
+    dist = spot_price - gamma_trap
+    if abs(dist) <= 2.0:
+        return "at_trap"
+    elif dist > 0:
+        return "above_trap"
+    return "below_trap"

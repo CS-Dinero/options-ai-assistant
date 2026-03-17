@@ -18,6 +18,7 @@ Later: double diagonals, event diagonals, roll logic.
 from calculator.chain_helpers import filter_chain, nearest_strike_to
 from calculator.risk_engine    import compute_contracts, prob_itm_proxy, prob_touch_proxy
 from calculator.trade_scoring  import score_trade
+from engines.gamma_engine      import gamma_trap_distance, spot_position_vs_trap
 from config.settings import (
     DIAGONAL_TARGET_MULTIPLIER,
     DIAGONAL_STOP_PERCENT,
@@ -26,6 +27,7 @@ from config.settings import (
     DIAGONAL_SHORT_DELTA_MIN,
     DIAGONAL_SHORT_DELTA_MAX,
     DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH,
+    MAX_LONG_EXTRINSIC_RATIO,
     MIN_LONG_LEG_OPEN_INTEREST,
     MAX_BID_ASK_SPREAD_PCT,
 )
@@ -42,10 +44,40 @@ def _bid_ask_spread_pct(row: dict) -> float:
     return round((row.get("ask", 0) - row.get("bid", 0)) / mid, 4)
 
 
+def _extrinsic_ratio(long_leg: dict, spot_price: float, direction: str) -> float:
+    """
+    Compute what fraction of the long leg's premium is extrinsic (time value).
+
+    For LEAPS diagonals, this is the real acceptance guard:
+        60-70% intrinsic = healthy structure (extrinsic_ratio <= 0.40)
+        90%+ extrinsic   = overpaying for time value (reject)
+
+    Formula:
+        for call: intrinsic = max(0, spot - strike)
+        for put:  intrinsic = max(0, strike - spot)
+        extrinsic = mid - intrinsic
+        ratio = extrinsic / mid
+    """
+    mid    = long_leg.get("mid", 0)
+    strike = long_leg["strike"]
+    if mid <= 0:
+        return 1.0  # treat zero-mid as worst case
+
+    if "call" in direction:
+        intrinsic = max(0.0, spot_price - strike)
+    else:
+        intrinsic = max(0.0, strike - spot_price)
+
+    extrinsic = max(0.0, mid - intrinsic)
+    return round(extrinsic / mid, 4)
+
+
 def _find_long_leg(
     chain: list[dict],
     option_type: str,
     long_dte: int,
+    spot_price: float = 0.0,
+    direction: str = "bull_call_diagonal",
 ) -> dict | None:
     """
     Find the best long leg:
@@ -53,9 +85,9 @@ def _find_long_leg(
       - delta magnitude in [DIAGONAL_LONG_DELTA_MIN, DIAGONAL_LONG_DELTA_MAX]
       - OI >= MIN_LONG_LEG_OPEN_INTEREST
       - bid/ask spread pct <= MAX_BID_ASK_SPREAD_PCT
-    Among all qualifying, pick the one whose delta is closest to the midpoint (0.775).
+      - extrinsic ratio <= MAX_LONG_EXTRINSIC_RATIO (LEAPS quality filter)
+    Among all qualifying, pick the one whose delta is closest to midpoint (0.775).
     """
-    # Find the available DTE closest to target
     rows = [r for r in chain if r["option_type"] == option_type]
     if not rows:
         return None
@@ -73,8 +105,14 @@ def _find_long_leg(
             continue
         if (r.get("open_interest") or 0) < MIN_LONG_LEG_OPEN_INTEREST:
             continue
-        if _bid_ask_spread_pct(r) > MAX_BID_ASK_SPREAD_PCT:
+        spread_p = _bid_ask_spread_pct(r)
+        if r.get("mid", 0) > 0 and spread_p > MAX_BID_ASK_SPREAD_PCT:
             continue
+        # Extrinsic filter: reject if paying too much time value on long leg
+        if spot_price > 0:
+            ext_ratio = _extrinsic_ratio(r, spot_price, direction)
+            if ext_ratio > MAX_LONG_EXTRINSIC_RATIO:
+                continue
         candidates.append(r)
 
     if not candidates:
@@ -148,8 +186,16 @@ def _build_diagonal_candidate(
     if debit <= 0:
         return None
 
-    # 75% width rule
-    if width > 0 and debit > width * DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH:
+    # Debit cap:
+    # For short-dated diagonals (long DTE <= 30): use strict debit-pct-of-width check.
+    # For LEAPS long legs (long DTE > 30): debit includes substantial intrinsic value
+    # and naturally runs 85-97% of width. Skip width-ratio check; use budget check only.
+    long_dte_val = long_leg.get("dte", 0)
+    if width > 0 and long_dte_val <= 30:
+        if debit > width * DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH:
+            return None
+    # For LEAPS, reject only if debit exceeds the full strike width (clearly wrong pricing)
+    elif width > 0 and debit >= width:
         return None
 
     debit_pct_of_width = round(debit / width, 4) if width > 0 else None
@@ -165,13 +211,22 @@ def _build_diagonal_candidate(
     long_delta  = long_leg.get("delta")
     short_delta = short_leg.get("delta")
     spread_pct  = _bid_ask_spread_pct(long_leg)
+    spot        = market["spot_price"]
+
+    # Gamma trap diagnostics for scoring and display
+    gamma_trap      = derived.get("gamma_trap")
+    trap_dist       = gamma_trap_distance(spot, gamma_trap)
+    spot_vs_trap    = spot_position_vs_trap(spot, gamma_trap)
+    ext_ratio       = _extrinsic_ratio(long_leg, spot, direction)
 
     notes = (
         f"{direction.replace('_', ' ').title()} — "
         f"long Δ={abs(long_delta):.2f} OI={long_leg.get('open_interest',0):,} "
         f"spread={spread_pct:.1%}, "
         f"short Δ={abs(short_delta):.2f} near EM boundary, "
-        f"debit {debit_pct_of_width:.0%} of width"
+        f"debit {debit_pct_of_width:.0%} of width, "
+        f"extrinsic {ext_ratio:.0%}, "
+        f"spot {spot_vs_trap.replace('_',' ')}"
         if long_delta and short_delta and debit_pct_of_width
         else f"{direction.replace('_', ' ').title()}"
     )
@@ -206,6 +261,11 @@ def _build_diagonal_candidate(
         "long_open_interest":       long_leg.get("open_interest", 0),
         "long_bid_ask_spread_pct":  spread_pct,
         "debit_pct_of_width":       debit_pct_of_width,
+        "long_extrinsic_ratio":     ext_ratio,
+        "gamma_trap_distance":      trap_dist,
+        "spot_vs_trap":             spot_vs_trap,
+        "short_dte":                short_leg["dte"],
+        "long_dte":                 long_leg["dte"],
     }
 
     return candidate
@@ -231,9 +291,10 @@ def generate_diagonal_candidates(
     lower_em  = derived["lower_em"]
     short_dte = market.get("short_dte_target", 7)
     long_dte  = market.get("long_dte_target", 60)
+    spot      = market["spot_price"]
 
     # ── Bull call diagonal ────────────────────────────────────────────────────
-    long_call  = _find_long_leg(chain, "call", long_dte)
+    long_call  = _find_long_leg(chain, "call", long_dte, spot, "bull_call_diagonal")
     short_call = _find_short_leg(chain, "call", short_dte, upper_em)
 
     if long_call and short_call:
@@ -245,7 +306,7 @@ def generate_diagonal_candidates(
             results.append(candidate)
 
     # ── Bear put diagonal ─────────────────────────────────────────────────────
-    long_put  = _find_long_leg(chain, "put", long_dte)
+    long_put  = _find_long_leg(chain, "put", long_dte, spot, "bear_put_diagonal")
     short_put = _find_short_leg(chain, "put", short_dte, lower_em)
 
     if long_put and short_put:

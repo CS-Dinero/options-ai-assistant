@@ -325,14 +325,24 @@ def render_market_summary(market: dict, derived: dict):
         r = derived["gamma_regime"]
         st.markdown(colored_badge(r.upper(), regime_color(r)), unsafe_allow_html=True)
         gf = derived.get("gamma_flip")
+        gt = derived.get("gamma_trap")
+        trap_dist = round(gt - market["spot_price"], 1) if gt else None
+        dist_str = f" ({trap_dist:+.1f})" if trap_dist is not None else ""
         st.caption(f"Flip: ${gf:.0f}" if gf else "Flip: N/A")
 
     with col6:
-        st.markdown("**EM Method**")
-        m = derived["em_method"]
-        st.markdown(colored_badge(m.upper().replace("_", " "), "#3b82f6"), unsafe_allow_html=True)
+        st.markdown("**Gamma Trap**")
         gt = derived.get("gamma_trap")
-        st.caption(f"Trap: ${gt:.0f}" if gt else "Trap: N/A")
+        spot = market["spot_price"]
+        if gt:
+            trap_dist = round(gt - spot, 1)
+            dist_label = f"{trap_dist:+.1f}"
+            trap_color = "#22c55e" if abs(trap_dist) <= derived.get("expected_move", 9) * 0.5 else "#f59e0b"
+            st.markdown(colored_badge(f"${gt:.0f}", trap_color), unsafe_allow_html=True)
+            st.caption(f"Distance: {dist_label} pts")
+        else:
+            st.markdown(colored_badge("N/A", "#6b7280"), unsafe_allow_html=True)
+            st.caption("No gamma trap")
 
 
 # ─────────────────────────────────────────────
@@ -375,6 +385,17 @@ def render_trade_card(rank: int, t: dict, derived: dict):
         # Strike details
         mc1, mc2, mc3, mc4 = st.columns(4)
 
+        # Expiration display — single for verticals, dual for calendars/diagonals
+        is_time_spread = t["strategy_type"] in ("calendar", "diagonal")
+        short_dte_val  = t.get("short_dte", "")
+        long_dte_val   = t.get("long_dte", "")
+
+        if is_time_spread:
+            exp_display  = f"{t['short_expiration']} ({short_dte_val}d)"
+            lexp_display = f"{t['long_expiration']} ({long_dte_val}d)"
+        else:
+            exp_display = f"{t['short_expiration']} ({short_dte_val}d)" if short_dte_val else t["short_expiration"]
+
         if t["strategy_type"] in ("bear_call", "bull_put"):
             mc1.metric("Short Strike", f"${t['short_strike']:.0f}",
                        delta=f"Δ {t['short_delta']:.2f}")
@@ -382,7 +403,14 @@ def render_trade_card(rank: int, t: dict, derived: dict):
                        delta=f"Δ {t['hedge_delta']:.2f}")
             mc3.metric("Credit",       f"${credit:.2f}",
                        delta=f"${credit*100:.0f}/contract")
-            mc4.metric("Expiration",   t["short_expiration"])
+            mc4.metric("Expiration",   exp_display)
+        elif t["strategy_type"] in ("calendar", "diagonal"):
+            mc1.metric("Long Strike",  f"${t['long_strike']:.0f}",
+                       delta=f"Δ {t.get('long_delta', 0):.2f}")
+            mc2.metric("Short Strike", f"${t['short_strike']:.0f}",
+                       delta=f"Δ {t.get('short_delta', 0):.2f}")
+            mc3.metric("Short Exp",    exp_display)
+            mc4.metric("Long Exp",     lexp_display)
         else:
             mc1.metric("Long Strike",  f"${t['long_strike']:.0f}",
                        delta=f"Δ {t['long_delta']:.2f}")
@@ -390,12 +418,12 @@ def render_trade_card(rank: int, t: dict, derived: dict):
                        delta=f"Δ {t['short_delta']:.2f}")
             mc3.metric("Debit",        f"${abs(credit):.2f}",
                        delta=f"${abs(credit)*100:.0f}/contract")
-            mc4.metric("Expiration",   t["short_expiration"])
+            mc4.metric("Expiration",   exp_display)
 
         # Risk row
         rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-        max_p = t['max_profit']
-        rc1.metric("Max Profit",   f"${max_p:.0f}" if max_p is not None else "Variable")
+        mp_str = f"${t['max_profit']:.0f}" if t.get('max_profit') is not None else "Open"
+        rc1.metric("Max Profit",   mp_str)
         rc2.metric("Max Loss",     f"${t['max_loss']:.0f}")
         rc3.metric("Target Exit",  f"${t['target_exit_value']:.2f}")
         rc4.metric("Stop Level",   f"${t['stop_value']:.2f}")

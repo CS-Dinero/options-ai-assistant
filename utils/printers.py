@@ -65,7 +65,11 @@ def print_trade(rank: int, t: dict) -> None:
     print(f"  ─── Trade #{rank}  {score_label(t['confidence_score'])} ───")
     print(f"  Strategy    : {label}  ({t['direction'].upper()})")
     print(f"  Symbol      : {t['symbol']}")
-    print(f"  Expiration  : {t['short_expiration']}")
+    if t["strategy_type"] in ("calendar", "diagonal"):
+        print(f"  Short Exp   : {t['short_expiration']} ({t.get('short_dte', '?')} DTE)")
+        print(f"  Long Exp    : {t['long_expiration']} ({t.get('long_dte', '?')} DTE)")
+    else:
+        print(f"  Expiration  : {t['short_expiration']} ({t.get('short_dte', '?')} DTE)")
 
     if t["strategy_type"] in ("bear_call", "bull_put"):
         print(f"  Short Strike: ${t['short_strike']:.0f}  Δ={t['short_delta']:.2f}")

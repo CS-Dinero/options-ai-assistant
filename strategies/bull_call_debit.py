@@ -65,6 +65,8 @@ def generate_bull_call_debit_spreads(
         "prob_touch_proxy": prob_touch_proxy(long_leg["delta"]),
         "contracts":        contracts,
         "confidence_score": 0,
+        "short_dte":        short_leg["dte"],
+        "long_dte":         long_leg["dte"],
         "notes": (
             f"Buy {long_leg['strike']:.0f} call / "
             f"Sell {short_leg['strike']:.0f} call near upper EM {upper_em}"

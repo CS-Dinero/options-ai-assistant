@@ -69,6 +69,8 @@ def generate_bull_put_spreads(
         "prob_touch_proxy": prob_touch_proxy(short_leg["delta"]),
         "contracts":        contracts,
         "confidence_score": 0,
+        "short_dte":        short_leg["dte"],
+        "long_dte":         long_leg["dte"],
         "notes": (
             f"Short put {short_leg['strike']:.0f} Δ={short_leg['delta']:.2f} "
             f"below lower EM {lower_em}"

@@ -33,7 +33,7 @@ DIAGONAL_LONG_DELTA_MIN          = 0.70
 DIAGONAL_LONG_DELTA_MAX          = 0.85
 DIAGONAL_SHORT_DELTA_MIN         = 0.20
 DIAGONAL_SHORT_DELTA_MAX         = 0.35
-DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH  = 0.75
+DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH  = 1.00  # LEAPS: only reject if debit >= full width (wrong pricing)
 MIN_LONG_LEG_OPEN_INTEREST       = 500
 MAX_BID_ASK_SPREAD_PCT           = 0.08
 
@@ -64,3 +64,12 @@ REQUIRED_CANDIDATE_FIELDS = [
     "prob_itm_proxy", "prob_touch_proxy",
     "contracts", "confidence_score", "notes",
 ]
+
+# LEAPS diagonal extrinsic filter
+# Rejects long legs where > MAX_LONG_EXTRINSIC_RATIO of premium is time value.
+# Professional range: 0.30-0.40 (60-70% must be intrinsic value)
+MAX_LONG_EXTRINSIC_RATIO = 0.40
+
+# Gamma trap proximity for calendar targeting
+# Calendar uses gamma trap strike only when trap is within this % of EM from spot
+GAMMA_TRAP_PROXIMITY_PCT = 0.50

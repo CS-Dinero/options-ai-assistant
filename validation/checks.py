@@ -104,6 +104,28 @@ def run_validation_checks(
         ("Contracts >= 1 for all trades",
             all(t["contracts"] >= 1 for t in ranked)),
 
+        # DTE schema checks
+        ("All candidates have short_expiration",
+            all(t.get("short_expiration") for t in ranked)),
+        ("All candidates have long_expiration",
+            all(t.get("long_expiration") for t in ranked)),
+        ("All candidates have short_dte",
+            all(isinstance(t.get("short_dte"), int) for t in ranked)),
+        ("All candidates have long_dte",
+            all(isinstance(t.get("long_dte"), int) for t in ranked)),
+        ("Vertical spreads use same expiration",
+            all(
+                t["short_expiration"] == t["long_expiration"]
+                for t in ranked
+                if t["strategy_type"] in ("bear_call", "bull_put", "bull_call_debit", "bear_put_debit")
+            )),
+        ("Calendars/diagonals have different expirations",
+            all(
+                t["short_expiration"] != t["long_expiration"]
+                for t in ranked
+                if t["strategy_type"] in ("calendar", "diagonal")
+            )),
+
         # Gamma engine checks
         ("GEX by strike is dict",
             isinstance(derived.get("gex_by_strike"), dict)),
@@ -117,6 +139,48 @@ def run_validation_checks(
             derived.get("gamma_regime") in ("positive", "negative", "neutral", "unknown")),
         ("Mock mode gamma regime resolved",
             derived.get("gamma_regime") != "unknown"),
+
+        # DTE / expiration schema checks
+        ("All candidates have short_expiration",
+            all("short_expiration" in t and t["short_expiration"] for t in ranked)),
+        ("All candidates have long_expiration",
+            all("long_expiration" in t and t["long_expiration"] for t in ranked)),
+        ("All candidates have short_dte",
+            all("short_dte" in t and isinstance(t["short_dte"], int) for t in ranked)),
+        ("All candidates have long_dte",
+            all("long_dte" in t and isinstance(t["long_dte"], int) for t in ranked)),
+        ("Vertical spreads use same expiration",
+            all(
+                t["short_expiration"] == t["long_expiration"]
+                for t in ranked
+                if t["strategy_type"] in ("bear_call","bull_put","bull_call_debit","bear_put_debit")
+            )),
+        ("Calendars carry two different expirations",
+            all(
+                t["short_expiration"] != t["long_expiration"]
+                for t in ranked
+                if t["strategy_type"] == "calendar"
+            )),
+        ("Diagonals carry two different expirations",
+            all(
+                t["short_expiration"] != t["long_expiration"]
+                for t in ranked
+                if t["strategy_type"] == "diagonal"
+            )),
+        ("Calendar short_dte < long_dte",
+            all(
+                t["short_dte"] < t["long_dte"]
+                for t in ranked
+                if t["strategy_type"] == "calendar"
+                and "short_dte" in t and "long_dte" in t
+            )),
+        ("Diagonal short_dte < long_dte",
+            all(
+                t["short_dte"] < t["long_dte"]
+                for t in ranked
+                if t["strategy_type"] == "diagonal"
+                and "short_dte" in t and "long_dte" in t
+            )),
     ]
 
     all_pass = all(result for _, result in checks)
@@ -303,7 +367,7 @@ def run_diagonal_validation(ranked: list[dict]) -> tuple[bool, list[tuple[str, b
         DIAGONAL_LONG_DELTA_MIN, DIAGONAL_LONG_DELTA_MAX,
         DIAGONAL_SHORT_DELTA_MIN, DIAGONAL_SHORT_DELTA_MAX,
         DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH, MIN_LONG_LEG_OPEN_INTEREST,
-        MAX_BID_ASK_SPREAD_PCT,
+        MAX_BID_ASK_SPREAD_PCT, MAX_LONG_EXTRINSIC_RATIO,
     )
     diag    = [t for t in ranked if t["strategy_type"] == "diagonal"]
     has_diag = len(diag) > 0
@@ -336,7 +400,7 @@ def run_diagonal_validation(ranked: list[dict]) -> tuple[bool, list[tuple[str, b
                 for t in diag if t.get("short_delta") is not None
             ) if has_diag else True),
 
-        ("Diagonal debit within 75% width cap",
+        ("Diagonal debit within configured width cap",
             all(
                 t["debit_pct_of_width"] <= DIAGONAL_MAX_DEBIT_PCT_OF_WIDTH
                 for t in diag if t.get("debit_pct_of_width") is not None
@@ -356,6 +420,16 @@ def run_diagonal_validation(ranked: list[dict]) -> tuple[bool, list[tuple[str, b
 
         ("Diagonal scored 0-100",
             all(0 <= t["confidence_score"] <= 100 for t in diag) if has_diag else True),
+        ("Diagonal extrinsic ratio within cap",
+            all(
+                t.get("long_extrinsic_ratio", 0) <= MAX_LONG_EXTRINSIC_RATIO
+                for t in diag if t.get("long_extrinsic_ratio") is not None
+            ) if has_diag else True),
+        ("Diagonal includes gamma trap diagnostics",
+            all(
+                "gamma_trap_distance" in t and "spot_vs_trap" in t
+                for t in diag
+            ) if has_diag else True),
     ]
 
     all_pass = all(ok for _, ok in checks)

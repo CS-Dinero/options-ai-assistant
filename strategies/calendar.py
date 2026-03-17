@@ -16,12 +16,14 @@ Later: put calendars, event calendars, double calendars.
 from calculator.chain_helpers  import nearest_atm, nearest_strike_to, filter_chain
 from calculator.risk_engine     import compute_contracts, prob_itm_proxy, prob_touch_proxy
 from calculator.trade_scoring   import score_trade
+from engines.gamma_engine       import is_gamma_trap_near_spot
 from config.settings import (
     CALENDAR_TARGET_MULTIPLIER,
     CALENDAR_STOP_PERCENT,
     CALENDAR_THETA_RATIO_MIN,
     CALENDAR_IV_REGIMES_OK,
     CALENDAR_TERM_STRUCTURES_OK,
+    GAMMA_TRAP_PROXIMITY_PCT,
 )
 
 
@@ -67,13 +69,26 @@ def generate_calendar_candidates(
     if derived.get("term_structure") not in CALENDAR_TERM_STRUCTURES_OK:
         return results   # backwardation kills calendar edge
 
-    # ── Strike selection ──────────────────────────────────────────────────────
+    # ── Strike selection — proximity-aware gamma trap targeting ───────────────
     spot         = market["spot_price"]
-    gamma_trap   = market.get("gamma_trap_strike")
+    gamma_trap   = derived.get("gamma_trap") or market.get("gamma_trap_strike")
     short_dte_t  = market.get("short_dte_target", 7)
     long_dte_t   = market.get("long_dte_target", 60)
+    expected_move = derived.get("expected_move", 9.0)
 
-    calendar_strike = gamma_trap if gamma_trap else spot
+    # Use gamma trap only when it's close enough to spot to aid pinning
+    trap_is_near = is_gamma_trap_near_spot(
+        spot, gamma_trap, expected_move, GAMMA_TRAP_PROXIMITY_PCT
+    )
+    if trap_is_near and gamma_trap:
+        calendar_strike = gamma_trap
+        trap_label = f"gamma trap ${gamma_trap:.0f}"
+    else:
+        calendar_strike = spot
+        if gamma_trap:
+            trap_label = f"ATM (gamma trap ${gamma_trap:.0f} too far)"
+        else:
+            trap_label = "ATM (no gamma trap data)"
 
     # Find the short and long leg rows at the chosen strike
     # Short leg: nearest DTE to short_dte_target
@@ -136,13 +151,12 @@ def generate_calendar_candidates(
     )
 
     # ── Notes ─────────────────────────────────────────────────────────────────
-    strike_source = "gamma trap" if gamma_trap and abs(gamma_trap - actual_strike) < 2.5 else "ATM"
-    theta_note    = (
+    theta_note = (
         f"theta ratio {abs(short_leg['theta']):.3f}/{abs(exact_long['theta']):.3f}"
         if short_leg.get("theta") and exact_long.get("theta") else "theta N/A"
     )
     notes = (
-        f"Call calendar at {strike_source} strike ${actual_strike:.0f}, "
+        f"Call calendar centered at {trap_label}, strike ${actual_strike:.0f}, "
         f"{derived.get('term_structure','?')} term structure, "
         f"{theta_note}"
     )
@@ -167,6 +181,8 @@ def generate_calendar_candidates(
         "contracts":          contracts,
         "confidence_score":   0,
         "notes":              notes,
+        "short_dte":          short_leg["dte"],
+        "long_dte":           exact_long["dte"],
         # Diagnostic fields
         "long_delta":         exact_long.get("delta"),
         "short_delta":        short_leg.get("delta"),

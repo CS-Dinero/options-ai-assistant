@@ -71,6 +71,8 @@ def generate_bear_call_spreads(
         "prob_touch_proxy": prob_touch_proxy(short_leg["delta"]),
         "contracts":        contracts,
         "confidence_score": 0,
+        "short_dte":        short_leg["dte"],
+        "long_dte":         long_leg["dte"],
         "notes": (
             f"Short call {short_leg['strike']:.0f} Δ={short_leg['delta']:.2f} "
             f"above upper EM {upper_em}"
