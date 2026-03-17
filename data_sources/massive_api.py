@@ -368,8 +368,10 @@ def get_expirations(symbol: str, session=None) -> list[str]:
     reliably discovers expirations well beyond the current week.
     """
     today = date.today()
-    days_to_friday = (4 - today.weekday()) % 7
-    first_friday   = today + timedelta(days=days_to_friday if days_to_friday else 7)
+    days_ahead = 4 - today.weekday()
+    if days_ahead <= 0:
+        days_ahead += 7
+    first_friday = today + timedelta(days=days_ahead)
 
     candidates = [
         (first_friday + timedelta(weeks=i)).isoformat()

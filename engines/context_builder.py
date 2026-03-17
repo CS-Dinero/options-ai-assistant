@@ -13,7 +13,8 @@ from engines.atr_engine     import classify_atr_trend, em_atr_ratio
 from engines.iv_regime      import classify_iv_regime
 from engines.term_structure import compute_term_slope, classify_term_structure
 from engines.skew_engine    import compute_skew, classify_skew
-from engines.gamma_engine   import compute_gamma_context, classify_gamma_regime
+from engines.gamma_engine        import compute_gamma_context, classify_gamma_regime
+from engines.strategy_regime     import determine_vga_from_context
 
 
 def build_derived(market: dict, chain: list | None = None) -> dict:
@@ -60,7 +61,7 @@ def build_derived(market: dict, chain: list | None = None) -> dict:
             "gamma_regime":  classify_gamma_regime(total_gex),
         }
 
-    return {
+    result = {
         # Expected move
         "expected_move": em_result["expected_move"],
         "upper_em":      em_result["upper_em"],
@@ -89,3 +90,5 @@ def build_derived(market: dict, chain: list | None = None) -> dict:
         "gamma_trap":    gamma_ctx["gamma_trap"],
         "gex_by_strike": gamma_ctx["gex_by_strike"],
     }
+    result["vga_environment"] = determine_vga_from_context(result)
+    return result
