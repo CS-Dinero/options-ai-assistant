@@ -72,8 +72,10 @@ def _trading_days(start: date, end: date) -> list[date]:
 
 
 def _next_friday(from_date: date, weeks_ahead: int = 0) -> date:
-    days_to_friday = (4 - from_date.weekday()) % 7 or 7
-    return from_date + timedelta(days=days_to_friday + weeks_ahead * 7)
+    days_ahead = 4 - from_date.weekday()   # Friday = weekday 4
+    if days_ahead <= 0:
+        days_ahead += 7
+    return from_date + timedelta(days=days_ahead + weeks_ahead * 7)
 
 
 # ── Price simulation (geometric brownian motion) ──────────────────────────────
