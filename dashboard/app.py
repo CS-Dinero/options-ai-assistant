@@ -681,9 +681,6 @@ def main():
         _render_backtest_panel()
 
 
-if __name__ == "__main__":
-    main()
-
 
 # ─────────────────────────────────────────────
 # TRADE LOG PANEL
@@ -1016,3 +1013,7 @@ def _render_backtest_panel():
                 mime="text/csv",
                 use_container_width=False,
             )
+
+
+if __name__ == "__main__":
+    main()
