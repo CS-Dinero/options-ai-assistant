@@ -21,12 +21,3 @@ Thumbs.db
 
 # Streamlit secrets (contains API keys)
 .streamlit/secrets.toml
-
-# Historical data — generated locally, not tracked in git
-data/historical/prices/
-data/historical/chains/
-data/historical/volatility/
-data/historical/gamma/
-
-# Trade logs — local only
-logs/

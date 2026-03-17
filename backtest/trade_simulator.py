@@ -117,9 +117,52 @@ def mark_trade_to_market(
 ) -> float | None:
     """
     Return the current market value of a trade from a chain snapshot.
-    Dispatch to the correct pricer by strategy_type.
+    Dispatches to the correct pricer by strategy_type.
     """
-    return price_vertical_from_snapshot(trade, chain_snapshot)
+    strategy = trade.get("strategy_type", "")
+    if strategy in ("bull_put", "bear_call", "bull_call_debit", "bear_put_debit"):
+        return price_vertical_from_snapshot(trade, chain_snapshot)
+    elif strategy in ("calendar", "diagonal"):
+        return price_time_spread_from_snapshot(trade, chain_snapshot)
+    return None
+
+
+def price_time_spread_from_snapshot(
+    trade: dict,
+    chain_snapshot: list[dict],
+) -> float | None:
+    """
+    Price a calendar or diagonal spread from a daily chain snapshot.
+
+    Both are long back-month / short front-month structures:
+        value = long_leg_mid - short_leg_mid
+    Higher is better (debit spread logic).
+    Returns None if either leg can't be priced.
+    """
+    direction = trade.get("direction", "")
+
+    # Determine option type from direction
+    if "call" in direction or trade.get("strategy_type") == "calendar":
+        opt_type = "call"
+    else:
+        opt_type = "put"
+
+    long_mid  = find_option_mark(
+        chain_snapshot,
+        trade.get("long_expiration", ""),
+        opt_type,
+        trade.get("long_strike") or 0,
+    )
+    short_mid = find_option_mark(
+        chain_snapshot,
+        trade.get("short_expiration", ""),
+        opt_type,
+        trade.get("short_strike") or 0,
+    )
+
+    if long_mid is None or short_mid is None:
+        return None
+    return round(long_mid - short_mid, 4)
 
 
 # ─────────────────────────────────────────────
@@ -162,7 +205,7 @@ def check_exit_conditions(
         if stop is not None and current_value >= stop:
             return "stop_hit"
 
-    elif strategy_type in DEBIT_STRATEGIES:
+    elif strategy_type in DEBIT_STRATEGIES or strategy_type in ("calendar", "diagonal"):
         if target is not None and current_value >= target:
             return "target_hit"
         if stop is not None and current_value <= stop:
@@ -238,6 +281,7 @@ def simulate_trade(
     if strategy in CREDIT_STRATEGIES:
         pnl = (entry_price - exit_value) * 100 * contracts
     else:
+        # Debit spreads, calendars, diagonals — all pay debit to enter
         pnl = (exit_value - entry_price) * 100 * contracts
 
     return_pct   = round(pnl / max_loss, 4) if max_loss and max_loss > 0 else 0.0

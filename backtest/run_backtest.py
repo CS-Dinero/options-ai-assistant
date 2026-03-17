@@ -36,7 +36,9 @@ from backtest.validation       import (validate_contexts, validate_simulated_tra
 from strategies.bear_call      import generate_bear_call_spreads
 from strategies.bull_put       import generate_bull_put_spreads
 from strategies.bull_call_debit import generate_bull_call_debit_spreads
-from strategies.bear_put_debit import generate_bear_put_debit_spreads
+from strategies.bear_put_debit  import generate_bear_put_debit_spreads
+from strategies.calendar        import generate_calendar_candidates
+from strategies.diagonal        import generate_diagonal_candidates
 
 
 # ─────────────────────────────────────────────
@@ -86,6 +88,15 @@ def generate_trade_candidates_for_date(
         pass
     try:
         candidates += generate_bear_put_debit_spreads(market, chain, derived)
+    except Exception:
+        pass
+    # Phase 4B — calendar and diagonal (IV/term-structure gated internally)
+    try:
+        candidates += generate_calendar_candidates(market, chain, derived)
+    except Exception:
+        pass
+    try:
+        candidates += generate_diagonal_candidates(market, chain, derived)
     except Exception:
         pass
 

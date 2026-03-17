@@ -84,23 +84,28 @@ def score_label(score: int) -> str:
 
 def regime_color(regime: str) -> str:
     colors = {
-        "cheap":         "#22c55e",
-        "moderate":      "#f59e0b",
-        "elevated":      "#f97316",
-        "rich":          "#ef4444",
-        "contango":      "#22c55e",
-        "flat":          "#f59e0b",
-        "backwardation": "#ef4444",
-        "positive":      "#22c55e",
-        "neutral":       "#f59e0b",
-        "negative":      "#ef4444",
-        "unknown":       "#6b7280",
-        "high_put_skew": "#f97316",
-        "normal_skew":   "#22c55e",
-        "flat_skew":     "#f59e0b",
-        "rising":        "#ef4444",
-        "falling":       "#22c55e",
-        "flat":          "#f59e0b",
+        "cheap":                   "#22c55e",
+        "moderate":                "#f59e0b",
+        "elevated":                "#f97316",
+        "rich":                    "#ef4444",
+        "contango":                "#22c55e",
+        "flat":                    "#f59e0b",
+        "backwardation":           "#ef4444",
+        "positive":                "#22c55e",
+        "neutral":                 "#f59e0b",
+        "negative":                "#ef4444",
+        "unknown":                 "#6b7280",
+        "high_put_skew":           "#f97316",
+        "normal_skew":             "#22c55e",
+        "flat_skew":               "#f59e0b",
+        "rising":                  "#ef4444",
+        "falling":                 "#22c55e",
+        # VGA environments
+        "premium_selling":         "#22c55e",
+        "neutral_time_spreads":    "#3b82f6",
+        "cautious_directional":    "#f59e0b",
+        "trend_directional":       "#f97316",
+        "mixed":                   "#6b7280",
     }
     return colors.get(regime, "#6b7280")
 
@@ -273,6 +278,87 @@ def render_sidebar() -> tuple[str, str]:
 # MARKET SUMMARY PANEL
 # ─────────────────────────────────────────────
 
+def _render_vga_decision_box(derived: dict, market: dict) -> None:
+    """
+    VGA Decision Box — replaces a plain badge with an actionable panel.
+    Answers: 'What type of trade should I place right now?'
+    """
+    vga = derived.get("vga_environment", "mixed")
+
+    _meta = {
+        "premium_selling": (
+            "🟢", "PREMIUM SELLING", "Credit spreads preferred",
+            ["Bull Put Credit", "Bear Call Credit", "Iron Condor"],
+            ["Wide debit spreads", "Aggressive directional bets"],
+        ),
+        "neutral_time_spreads": (
+            "🔵", "NEUTRAL TIME SPREADS", "Calendars preferred",
+            ["ATM Calendars", "Diagonals"],
+            ["Wide credit spreads", "Trend chasing"],
+        ),
+        "cautious_directional": (
+            "🟡", "CAUTIOUS DIRECTIONAL", "Small directional trades only",
+            ["Small debit spreads", "Tight diagonals"],
+            ["Large position size", "ATM calendars"],
+        ),
+        "trend_directional": (
+            "🟠", "TREND DIRECTIONAL", "Directional trades",
+            ["Bull/Bear debit spreads", "Diagonals"],
+            ["Credit spreads", "Calendars"],
+        ),
+        "mixed": (
+            "⚫", "MIXED / UNCLEAR", "Reduce size or wait",
+            ["Small defined-risk only"],
+            ["Full-size trades", "New calendars"],
+        ),
+    }
+
+    icon, label, guidance, primary, avoid = _meta.get(
+        vga, ("⚫", "UNKNOWN", "No guidance", [], [])
+    )
+    color = regime_color(vga)
+
+    # Confidence from alignment of IV + gamma
+    iv_r  = derived.get("iv_regime", "")
+    gma_r = derived.get("gamma_regime", "")
+    if vga == "premium_selling" and iv_r in ("elevated", "rich") and gma_r == "positive":
+        confidence, conf_color = "HIGH — IV + Gamma fully aligned", "#22c55e"
+    elif vga == "mixed" or "unknown" in (iv_r, gma_r):
+        confidence, conf_color = "LOW — incomplete data",            "#6b7280"
+    else:
+        confidence, conf_color = "MEDIUM — borderline regime",        "#f59e0b"
+
+    primary_html = "".join(
+        f'<div style="font-size:12px;color:#e5e7eb;margin:1px 0">✓ {s}</div>'
+        for s in primary
+    )
+    avoid_html = "".join(
+        f'<div style="font-size:12px;color:#9ca3af;margin:1px 0">✗ {s}</div>'
+        for s in avoid
+    )
+
+    st.markdown(
+        f'<div style="background:{color}12;border:1px solid {color}40;'
+        f'border-radius:12px;padding:16px 20px;margin-bottom:12px">'
+        f'<div style="font-size:10px;color:#9ca3af;text-transform:uppercase;'
+        f'letter-spacing:1px;margin-bottom:4px">Market Mode</div>'
+        f'<div style="font-size:22px;font-weight:800;color:{color};margin-bottom:2px">'
+        f'{icon} {label}</div>'
+        f'<div style="font-size:13px;color:#d1d5db;margin-bottom:12px">{guidance}</div>'
+        f'<div style="display:flex;gap:32px">'
+        f'<div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;'
+        f'margin-bottom:4px">🎯 Primary</div>{primary_html}</div>'
+        f'<div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;'
+        f'margin-bottom:4px">⚠️ Avoid</div>{avoid_html}</div>'
+        f'<div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;'
+        f'margin-bottom:4px">📊 Confidence</div>'
+        f'<div style="font-size:12px;color:{conf_color};font-weight:600">'
+        f'{confidence}</div></div>'
+        f'</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_market_summary(market: dict, derived: dict):
     st.subheader(f"📈 {market['symbol']} Market Overview")
 
@@ -292,8 +378,11 @@ def render_market_summary(market: dict, derived: dict):
 
     st.divider()
 
-    # Regime badges row
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    # ── VGA Decision Box ──────────────────────────────────────────────────────
+    _render_vga_decision_box(derived, market)
+
+    # Regime badges row — 7 columns
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
     with col1:
         st.markdown("**IV Regime**")
@@ -325,24 +414,34 @@ def render_market_summary(market: dict, derived: dict):
         r = derived["gamma_regime"]
         st.markdown(colored_badge(r.upper(), regime_color(r)), unsafe_allow_html=True)
         gf = derived.get("gamma_flip")
-        gt = derived.get("gamma_trap")
-        trap_dist = round(gt - market["spot_price"], 1) if gt else None
-        dist_str = f" ({trap_dist:+.1f})" if trap_dist is not None else ""
         st.caption(f"Flip: ${gf:.0f}" if gf else "Flip: N/A")
 
     with col6:
         st.markdown("**Gamma Trap**")
-        gt = derived.get("gamma_trap")
+        gt   = derived.get("gamma_trap")
         spot = market["spot_price"]
         if gt:
-            trap_dist = round(gt - spot, 1)
-            dist_label = f"{trap_dist:+.1f}"
+            trap_dist  = round(gt - spot, 1)
             trap_color = "#22c55e" if abs(trap_dist) <= derived.get("expected_move", 9) * 0.5 else "#f59e0b"
             st.markdown(colored_badge(f"${gt:.0f}", trap_color), unsafe_allow_html=True)
-            st.caption(f"Distance: {dist_label} pts")
+            st.caption(f"Distance: {trap_dist:+.1f} pts")
         else:
             st.markdown(colored_badge("N/A", "#6b7280"), unsafe_allow_html=True)
             st.caption("No gamma trap")
+
+    with col7:
+        vga       = derived.get("vga_environment", "mixed")
+        _vga_short = {
+            "premium_selling":      "PREMIUM",
+            "neutral_time_spreads": "TIME SPREAD",
+            "cautious_directional": "CAUTIOUS",
+            "trend_directional":    "TREND",
+            "mixed":                "MIXED",
+        }
+        vga_color = regime_color(vga)
+        st.markdown("**VGA**")
+        st.markdown(colored_badge(_vga_short.get(vga, "?"), vga_color), unsafe_allow_html=True)
+        st.caption(derived.get("vga_environment", "mixed").replace("_", " "))
 
 
 # ─────────────────────────────────────────────
@@ -570,6 +669,17 @@ def main():
                     f"{t['notes']}"
                 )
 
+    # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
+    st.divider()
+    st.markdown("## 🗂 Tools")
+    tlog_tab, bt_tab = st.tabs(["📋 Trade Log & Export", "🔬 Backtest"])
+
+    with tlog_tab:
+        _render_trade_log_panel(candidates, market, derived)
+
+    with bt_tab:
+        _render_backtest_panel()
+
 
 if __name__ == "__main__":
     main()
@@ -581,131 +691,328 @@ if __name__ == "__main__":
 
 def _render_trade_log_panel(ranked: list[dict], market: dict, derived: dict):
     """
-    Trade Log section at the bottom of the dashboard.
-
-    Sections:
-      1. Export current scan suggestions to scan_log.csv
-      2. Log a trade as opened (one-click from top candidates)
-      3. View open positions
-      4. Performance summary (closed trades)
+    Trade Log tab — visible, always expanded, three sub-tabs.
     """
     logger = TradeLogger()
 
-    with st.expander("📋 Trade Log & Export", expanded=False):
-        tab1, tab2, tab3 = st.tabs(["📤 Export Scan", "📂 Open Trades", "📊 Stats"])
+    log_tab, positions_tab, stats_tab = st.tabs(
+        ["📤 Log Scan", "📂 Open Positions", "📊 Performance Stats"]
+    )
 
-        # ── Tab 1: Export scan suggestions ───────────────────────────────────
-        with tab1:
-            st.markdown("**Log today's AI suggestions to scan_log.csv**")
-            st.caption(
-                "Records every suggestion (taken or not). "
-                "This builds your strategy accuracy dataset over time."
+    # ── Log Scan ──────────────────────────────────────────────────────────────
+    with log_tab:
+        st.markdown("**Log today's AI suggestions**")
+        st.caption(
+            "Records every suggestion — taken or not. "
+            "Builds your strategy accuracy dataset over time."
+        )
+
+        if not ranked:
+            st.info("Run a live or mock scan first to see candidates here.")
+        else:
+            for i, t in enumerate(ranked[:3], start=1):
+                score  = t.get("confidence_score", 0)
+                label  = STRATEGY_LABELS.get(t["strategy_type"], t["strategy_type"])
+                tier   = "★ STRONG" if score >= SCORE_STRONG else "○ TRADABLE" if score >= SCORE_TRADABLE else "✗ SKIP"
+                col_l, col_no, col_yes = st.columns([4, 1, 1])
+                with col_l:
+                    st.markdown(f"**#{i} {label}** — {score}/100 {tier}")
+                    st.caption(t.get("notes", "")[:80])
+                with col_no:
+                    if st.button("Log only", key=f"scan_no_{i}", use_container_width=True):
+                        scan_id = logger.log_scan(t, market, derived, taken=False)
+                        st.success(f"Logged {scan_id}")
+                with col_yes:
+                    if st.button("Open trade", key=f"scan_yes_{i}", use_container_width=True, type="primary"):
+                        scan_id  = logger.log_scan(t, market, derived, taken=True)
+                        trade_id = logger.open_trade(t, market, derived)
+                        st.success(f"Trade opened: {trade_id}")
+
+        st.divider()
+        st.markdown("**Download CSV files**")
+        dc1, dc2, dc3 = st.columns(3)
+
+        def _csv_bytes(path):
+            if not path.exists() or path.stat().st_size == 0:
+                return b"No data yet"
+            return path.read_bytes()
+
+        with dc1:
+            st.download_button(
+                "⬇ trade_log.csv",
+                data=_csv_bytes(logger.trade_log_path),
+                file_name="trade_log.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with dc2:
+            st.download_button(
+                "⬇ scan_log.csv",
+                data=_csv_bytes(logger.scan_log_path),
+                file_name="scan_log.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with dc3:
+            st.download_button(
+                "⬇ position_monitor.csv",
+                data=_csv_bytes(logger.position_mon_path),
+                file_name="position_monitor.csv",
+                mime="text/csv",
+                use_container_width=True,
             )
 
-            if not ranked:
-                st.info("No candidates to export. Run with live or mock data first.")
-            else:
-                for i, t in enumerate(ranked[:3], start=1):
-                    label = f"#{i} {t['strategy_type'].replace('_',' ').title()} — Score {t['confidence_score']}"
-                    col1, col2, col3 = st.columns([4, 1, 1])
-                    with col1:
-                        st.caption(label)
-                    with col2:
-                        if st.button("Log (not taken)", key=f"scan_no_{i}"):
-                            scan_id = logger.log_scan(t, market, derived, taken=False)
-                            st.success(f"Logged {scan_id}")
-                    with col3:
-                        if st.button("Log + Open trade", key=f"scan_yes_{i}"):
-                            scan_id  = logger.log_scan(t, market, derived, taken=True)
-                            trade_id = logger.open_trade(t, market, derived)
-                            st.success(f"Trade {trade_id} opened")
+    # ── Open Positions ────────────────────────────────────────────────────────
+    with positions_tab:
+        open_trades = logger.get_open_trades()
+        if not open_trades:
+            st.info("No open trades yet. Use **Open trade** above after a scan.")
+        else:
+            st.caption(f"{len(open_trades)} open position(s)")
+            for t in open_trades:
+                with st.container(border=True):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric(
+                        t["strategy_type"].replace("_", " ").title(),
+                        f"${t.get('short_strike', '')} / ${t.get('long_strike', t.get('hedge_strike', ''))}",
+                    )
+                    c2.metric("Entry", f"${t.get('entry_price', '')}")
+                    c3.metric("Target", f"${t.get('target_price', '')}")
+                    c4.metric("Score", t.get("score", ""))
+                    st.caption(
+                        f"Opened {t['date_open']} | "
+                        f"Exp {t.get('short_expiration', '')} | "
+                        f"ID: `{t['trade_id']}`"
+                    )
+                    with st.expander("Close this trade"):
+                        ec1, ec2, ec3 = st.columns(3)
+                        exit_px = ec1.number_input("Exit price", value=0.0, step=0.01, key=f"ep_{t['trade_id']}")
+                        pnl_val = ec2.number_input("P&L ($)", value=0.0, step=1.0,    key=f"pnl_{t['trade_id']}")
+                        reason  = ec3.selectbox("Reason",
+                            ["target_hit", "stop_hit", "expiry", "manual_close", "rolled"],
+                            key=f"r_{t['trade_id']}")
+                        if st.button("Confirm close", key=f"close_{t['trade_id']}", type="primary"):
+                            ok = logger.close_trade(t["trade_id"], exit_px, pnl_val, reason)
+                            if ok:
+                                st.success(f"Trade {t['trade_id']} closed")
+                                st.rerun()
 
+    # ── Stats ─────────────────────────────────────────────────────────────────
+    with stats_tab:
+        stats = logger.summary_stats()
+        if stats["total_trades"] == 0:
+            st.info("Stats appear here after your first closed trade.")
+        else:
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Closed Trades", stats["total_trades"])
+            s2.metric("Win Rate",
+                      f"{stats['win_rate']*100:.1f}%" if stats["win_rate"] is not None else "—")
+            s3.metric("Avg P&L",
+                      f"${stats['avg_pnl']:.2f}" if stats["avg_pnl"] is not None else "—")
             st.divider()
-            st.markdown("**Download CSVs**")
-            dc1, dc2, dc3 = st.columns(3)
-
-            import io, csv as _csv
-            def _csv_bytes(path):
-                if not path.exists():
-                    return b"No data yet"
-                return path.read_bytes()
-
-            with dc1:
-                st.download_button(
-                    "⬇ trade_log.csv",
-                    data=_csv_bytes(logger.trade_log_path),
-                    file_name="trade_log.csv",
-                    mime="text/csv",
-                )
-            with dc2:
-                st.download_button(
-                    "⬇ scan_log.csv",
-                    data=_csv_bytes(logger.scan_log_path),
-                    file_name="scan_log.csv",
-                    mime="text/csv",
-                )
-            with dc3:
-                st.download_button(
-                    "⬇ position_monitor.csv",
-                    data=_csv_bytes(logger.position_mon_path),
-                    file_name="position_monitor.csv",
-                    mime="text/csv",
-                )
-
-        # ── Tab 2: Open positions ─────────────────────────────────────────────
-        with tab2:
-            open_trades = logger.get_open_trades()
-            if not open_trades:
-                st.info("No open trades logged yet. Use 'Log + Open trade' above.")
-            else:
-                st.caption(f"{len(open_trades)} open position(s)")
-                for t in open_trades:
-                    with st.container():
-                        c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
-                        c1.metric(t["strategy_type"].replace("_", " ").title(),
-                                  f"${t.get('short_strike', '')} / ${t.get('long_strike', '')}")
-                        c2.metric("Entry", f"${t.get('entry_price', '')}")
-                        c3.metric("Target", f"${t.get('target_price', '')}")
-                        c4.metric("Score", t.get("score", ""))
-                        st.caption(
-                            f"Opened {t['date_open']} | "
-                            f"Exp {t.get('short_expiration', '')} | "
-                            f"ID: {t['trade_id']}"
-                        )
-
-                        # Close trade form
-                        with st.form(key=f"close_{t['trade_id']}"):
-                            ec1, ec2, ec3 = st.columns(3)
-                            exit_px  = ec1.number_input("Exit price", value=0.0, step=0.01)
-                            pnl_val  = ec2.number_input("P&L ($)", value=0.0, step=1.0)
-                            reason   = ec3.selectbox("Reason",
-                                ["target_hit", "stop_hit", "expiry", "manual_close", "rolled"])
-                            if st.form_submit_button("Close trade"):
-                                ok = logger.close_trade(
-                                    t["trade_id"], exit_px, pnl_val, reason
-                                )
-                                if ok:
-                                    st.success(f"Trade {t['trade_id']} closed")
-                                    st.rerun()
-                        st.divider()
-
-        # ── Tab 3: Stats ──────────────────────────────────────────────────────
-        with tab3:
-            stats = logger.summary_stats()
-            if stats["total_trades"] == 0:
-                st.info("No closed trades yet. Stats appear after closing your first trade.")
-            else:
-                s1, s2, s3 = st.columns(3)
-                s1.metric("Total Closed", stats["total_trades"])
-                s2.metric("Win Rate",
-                          f"{stats['win_rate']*100:.1f}%" if stats["win_rate"] else "—")
-                s3.metric("Avg P&L", f"${stats['avg_pnl']:.2f}" if stats["avg_pnl"] else "—")
-
-                st.divider()
+            if stats["by_strategy"]:
                 st.markdown("**By Strategy**")
                 for strat, d in stats["by_strategy"].items():
                     wr = f"{d['win_rate']*100:.1f}%" if d["win_rate"] else "—"
                     st.caption(
-                        f"{strat.replace('_',' ').title()} — "
+                        f"**{strat.replace('_',' ').title()}** — "
                         f"{d['trades']} trades | Win rate: {wr} | Avg P&L: ${d['avg_pnl']:.2f}"
                     )
+
+
+# ─────────────────────────────────────────────
+# BACKTEST PANEL
+# ─────────────────────────────────────────────
+
+def _render_backtest_panel():
+    """
+    Backtest tab — run Phase 4 engine from the dashboard.
+
+    Inputs:  symbol, date range, max trades/day, score threshold
+    Outputs: performance table, equity curve, by-strategy, by-VGA-environment
+    """
+    import plotly.graph_objects as go
+    from backtest.run_backtest import run_backtest
+    from backtest.validation   import all_checks_pass
+
+    st.markdown("**Run a historical backtest using the live strategy engine**")
+    st.caption(
+        "Requires historical CSV data in `data/historical/`. "
+        "Use `backtest/generate_mock_data.py` for test data."
+    )
+
+    # ── Config inputs ─────────────────────────────────────────────────────────
+    cfg1, cfg2, cfg3, cfg4 = st.columns(4)
+    symbol         = cfg1.text_input("Symbol", value="SPY").upper().strip()
+    start_date     = cfg2.text_input("Start date", value="2025-03-10")
+    end_date       = cfg3.text_input("End date",   value="2025-04-18")
+    score_thresh   = cfg4.number_input("Min score", value=65, min_value=0, max_value=100, step=5)
+
+    cfg5, cfg6 = st.columns([1, 3])
+    max_per_day    = cfg5.number_input("Max trades/day", value=1, min_value=1, max_value=5, step=1)
+    starting_cap   = cfg6.number_input("Starting capital ($)", value=100_000, step=1_000)
+
+    run_btn = st.button("▶ Run Backtest", type="primary", use_container_width=False)
+
+    if not run_btn:
+        st.info("Configure parameters above and click **Run Backtest**.")
+        return
+
+    # ── Run ───────────────────────────────────────────────────────────────────
+    with st.spinner(f"Running backtest: {symbol} {start_date} → {end_date}…"):
+        try:
+            result = run_backtest(
+                symbols            = [symbol],
+                start              = start_date,
+                end                = end_date,
+                starting_capital   = float(starting_cap),
+                max_trades_per_day = int(max_per_day),
+                score_threshold    = int(score_thresh),
+            )
+        except FileNotFoundError as e:
+            st.error(
+                f"Historical data not found: `{e}`\n\n"
+                f"Run `python backtest/generate_mock_data.py` to generate mock data, "
+                f"or add real CSV files to `data/historical/`."
+            )
+            return
+        except Exception as e:
+            st.error(f"Backtest error: {e}")
+            return
+
+    st.success("Backtest complete")
+
+    st.divider()
+
+    # ── Validation status ─────────────────────────────────────────────────────
+    vl      = result.get("validation", [])
+    passed  = result.get("passed")
+    n_pass  = sum(1 for _, ok in vl if ok)
+    n_total = len(vl)
+
+    if passed:
+        st.caption(f"✅ {n_pass}/{n_total} validation checks passed")
+    else:
+        fails = [n for n, ok in vl if not ok]
+        st.warning(f"⚠️ {n_pass}/{n_total} checks passed — failures: {', '.join(fails[:5])}")
+
+    # ── Top-line metrics ──────────────────────────────────────────────────────
+    st.markdown("### 📊 Performance Summary")
+    pf   = result["performance"]
+    eq_s = result["equity_summary"]
+    st_  = result["simulated_trades"]
+
+    total_pnl = sum(t["pnl"] for t in st_)
+
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric("Trades",       pf["total_trades"])
+    m2.metric("Win Rate",     f"{pf['win_rate']*100:.1f}%")
+    m3.metric("Expectancy",   f"${pf['expectancy']:.2f}")
+    m4.metric("Profit Factor",
+              f"{pf['profit_factor']:.2f}" if pf["profit_factor"] != float("inf") else "∞")
+    m5.metric("Max Drawdown", f"{pf['max_drawdown']*100:.1f}%")
+    m6.metric("Total P&L",    f"${total_pnl:.2f}",
+              delta=f"${eq_s['net_profit']:.2f} net")
+
+    m7, m8, m9 = st.columns(3)
+    m7.metric("Sharpe",        f"{pf['sharpe']:.2f}")
+    m8.metric("Sortino",
+              f"{pf['sortino']:.2f}" if pf["sortino"] != float("inf") else "∞")
+    m9.metric("Avg Days Held", f"{pf['average_days_held']:.1f}")
+
+    # ── Equity curve ──────────────────────────────────────────────────────────
+    eq = result["equity_curve"]
+    if eq:
+        st.markdown("### 📈 Equity Curve")
+        dates   = [p["date"]   for p in eq]
+        equities = [p["equity"] for p in eq]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=dates, y=equities,
+            mode="lines+markers",
+            line=dict(color="#22c55e", width=2),
+            marker=dict(size=5),
+            name="Equity",
+            hovertemplate="%{x}<br>$%{y:,.2f}<extra></extra>",
+        ))
+        fig.add_hline(
+            y=eq_s["starting_capital"],
+            line_dash="dash", line_color="#6b7280",
+            annotation_text=f"Start ${eq_s['starting_capital']:,.0f}",
+        )
+        fig.update_layout(
+            height=280,
+            margin=dict(l=0, r=0, t=20, b=0),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e5e7eb"),
+            xaxis=dict(gridcolor="#374151"),
+            yaxis=dict(gridcolor="#374151", tickprefix="$"),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # ── Report tabs ───────────────────────────────────────────────────────────
+    rp = result["reports"]
+    r1, r2, r3, r4 = st.tabs(
+        ["By Strategy", "By VGA Environment", "By IV Regime", "By Gamma Regime"]
+    )
+
+    def _report_table(report_dict: dict):
+        if not report_dict:
+            st.caption("No data.")
+            return
+        rows = []
+        for label, d in report_dict.items():
+            rows.append({
+                "Group":         label.replace("_", " ").title(),
+                "Trades":        d.get("trades", 0),
+                "Win Rate":      f"{d['win_rate']*100:.1f}%" if d.get("win_rate") is not None else "—",
+                "Expectancy":    f"${d.get('expectancy', 0):.2f}",
+                "Profit Factor": f"{d['profit_factor']:.2f}" if d.get("profit_factor") not in (None, float("inf")) else "∞",
+                "Avg Days":      f"{d.get('average_days_held', 0):.1f}",
+                "Total P&L":     f"${d.get('total_pnl', 0):.2f}",
+            })
+        import pandas as pd
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    with r1:
+        _report_table(rp.get("by_strategy", {}))
+    with r2:
+        _report_table(rp.get("by_environment", {}))
+    with r3:
+        _report_table(rp["by_regime"].get("iv_regime", {}))
+    with r4:
+        _report_table(rp["by_regime"].get("gamma_regime", {}))
+
+    st.divider()
+
+    # ── Raw trade log ─────────────────────────────────────────────────────────
+    with st.expander(f"Raw simulated trades ({len(st_)})"):
+        if st_:
+            import pandas as pd
+            display_cols = [
+                "trade_id", "strategy_type", "entry_date", "exit_date",
+                "entry_price", "exit_price", "pnl", "return_pct",
+                "exit_reason", "days_held", "vga_environment", "score",
+            ]
+            df = pd.DataFrame(st_)[[c for c in display_cols if c in df.columns if c in df.columns]]
+            df2 = pd.DataFrame([{c: t.get(c, "") for c in display_cols} for t in st_])
+            st.dataframe(df2, use_container_width=True, hide_index=True)
+
+        # Download button
+        import io, csv as _csv
+        if st_:
+            buf = io.StringIO()
+            w = _csv.DictWriter(buf, fieldnames=list(st_[0].keys()))
+            w.writeheader()
+            w.writerows(st_)
+            st.download_button(
+                "⬇ Download backtest results CSV",
+                data=buf.getvalue().encode(),
+                file_name=f"backtest_{symbol}_{start_date}_{end_date}.csv",
+                mime="text/csv",
+                use_container_width=False,
+            )
