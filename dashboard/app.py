@@ -1006,7 +1006,6 @@ def _render_backtest_panel():
                 "entry_price", "exit_price", "pnl", "return_pct",
                 "exit_reason", "days_held", "vga_environment", "score",
             ]
-            df = pd.DataFrame(st_)[[c for c in display_cols if c in df.columns if c in df.columns]]
             df2 = pd.DataFrame([{c: t.get(c, "") for c in display_cols} for t in st_])
             st.dataframe(df2, use_container_width=True, hide_index=True)
 
