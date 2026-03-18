@@ -71,7 +71,7 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         w.writerows(rows)
 
 
-def generate(num_days: int = 30) -> None:
+def generate(num_days: int = 30, symbol: str = SYMBOL) -> None:
     trading_days: list[date] = []
     d = date(2025, 3, 10)
     while len(trading_days) < num_days:
@@ -87,22 +87,22 @@ def generate(num_days: int = 30) -> None:
         spot = max(490.0, min(555.0, spot + random.uniform(-2.5, 2.5)))
         spot = round(spot, 2)
         price_map[day.strftime("%Y-%m-%d")] = spot
-        price_rows.append({"date": day.strftime("%Y-%m-%d"), "symbol": SYMBOL,
+        price_rows.append({"date": day.strftime("%Y-%m-%d"), "symbol": symbol,
             "open": round(spot-1,2), "high": round(spot+2,2),
             "low": round(spot-2,2), "close": spot, "volume": 80_000_000})
-    _write_csv(BASE / "prices" / f"{SYMBOL}_prices.csv", price_rows)
+    _write_csv(BASE / "prices" / f"{symbol}_prices.csv", price_rows)
 
     # ── Volatility ────────────────────────────────────────────────────────────
     vol_rows: list[dict] = []
     for day in trading_days:
         fi = round(random.uniform(14, 26), 1)
         bi = round(fi + random.uniform(0.5, 3.0), 1)
-        vol_rows.append({"date": day.strftime("%Y-%m-%d"), "symbol": SYMBOL,
+        vol_rows.append({"date": day.strftime("%Y-%m-%d"), "symbol": symbol,
             "atr_14": 3.8, "atr_prior": 3.5, "front_iv": fi, "back_iv": bi,
             "iv_percentile": round(random.uniform(20, 65), 1),
             "iv_min": 11.0, "iv_max": 32.0,
             "put_25d_iv": round(fi+5, 1), "call_25d_iv": round(fi-1, 1)})
-    _write_csv(BASE / "volatility" / f"{SYMBOL}_volatility.csv", vol_rows)
+    _write_csv(BASE / "volatility" / f"{symbol}_volatility.csv", vol_rows)
 
     # ── Chains — each day includes all active expirations ─────────────────────
     chain_rows: list[dict] = []
@@ -142,7 +142,7 @@ def generate(num_days: int = 30) -> None:
                     bid = max(0.01, round(price * 0.98, 2))
                     ask = max(0.02, round(price * 1.02, 2))
                     chain_rows.append({
-                        "date": day_str, "symbol": SYMBOL,
+                        "date": day_str, "symbol": symbol,
                         "expiration": exp_str, "dte": dte, "option_type": ot,
                         "strike": K_f, "bid": bid, "ask": ask,
                         "mid": round((bid + ask) / 2, 2),
@@ -151,7 +151,7 @@ def generate(num_days: int = 30) -> None:
                         "iv": sig * 100, "open_interest": oi, "volume": max(10, oi // 4),
                     })
 
-    _write_csv(BASE / "chains" / f"{SYMBOL}_chains.csv", chain_rows)
+    _write_csv(BASE / "chains" / f"{symbol}_chains.csv", chain_rows)
 
     day_strs = [d.strftime("%Y-%m-%d") for d in trading_days]
     print(f"Generated {num_days} trading days: {day_strs[0]} → {day_strs[-1]}")

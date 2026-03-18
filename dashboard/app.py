@@ -867,13 +867,23 @@ def _render_backtest_panel():
                 max_trades_per_day = int(max_per_day),
                 score_threshold    = int(score_thresh),
             )
-        except FileNotFoundError as e:
-            st.error(
-                f"Historical data not found: `{e}`\n\n"
-                f"Run `python backtest/generate_mock_data.py` to generate mock data, "
-                f"or add real CSV files to `data/historical/`."
-            )
-            return
+        except FileNotFoundError:
+            st.info(f"No historical data found for **{symbol}** — generating mock data…")
+            try:
+                from backtest.generate_mock_data import generate
+                generate(num_days=30, symbol=symbol)
+                st.success("Mock data generated. Re-running backtest…")
+                result = run_backtest(
+                    symbols            = [symbol],
+                    start              = start_date,
+                    end                = end_date,
+                    starting_capital   = float(starting_cap),
+                    max_trades_per_day = int(max_per_day),
+                    score_threshold    = int(score_thresh),
+                )
+            except Exception as e2:
+                st.error(f"Could not generate mock data or run backtest: {e2}")
+                return
         except Exception as e:
             st.error(f"Backtest error: {e}")
             return
