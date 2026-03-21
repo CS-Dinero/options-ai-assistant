@@ -20,9 +20,6 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
-load_dotenv(ROOT / ".env")
-
 import streamlit as st
 try:
     import plotly
@@ -36,6 +33,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Operator console link in sidebar
+with st.sidebar:
+    st.caption("⚙️ [Operator Console](operator_dashboard_app.py)")
+    st.divider()
 
 # ── Imports after path setup ──────────────────────────────────────────────────
 from data.mock_data import load_mock_market, build_mock_chain
@@ -266,8 +268,6 @@ def render_sidebar() -> tuple[str, str]:
             st.cache_data.clear()
             st.rerun()
 
-        st.divider()
-        st.caption("⚙️ [Operator Console](operator_dashboard_app.py)")
         st.divider()
         st.markdown(
             '<p style="font-size:11px;color:#6b7280">Data cached 5 min.<br>'
@@ -677,8 +677,9 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, governance_tab, system_tab, live_tab = st.tabs([
-        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data"
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab = st.tabs([
+        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest",
+        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data"
     ])
 
     with pos_tab:
@@ -713,14 +714,18 @@ def main():
     with optimizer_tab:
         _render_optimizer_panel()
 
-    with governance_tab:
+    with gov_tab:
         _render_governance_panel()
 
-    with system_tab:
+    with sys_tab:
         _render_system_panel()
 
     with live_tab:
         _render_live_data_panel()
+
+
+if __name__ == "__main__":
+    main()
 
 
 # ─────────────────────────────────────────────
@@ -915,22 +920,13 @@ def _render_backtest_panel():
                 max_trades_per_day = int(max_per_day),
                 score_threshold    = int(score_thresh),
             )
-        except FileNotFoundError:
-            st.info(f"No historical data found for **{symbol}** — generating mock data…")
-            from backtest.generate_mock_data import generate
-            generate(num_days=30, symbol=symbol)
-            try:
-                result = run_backtest(
-                    symbols            = [symbol],
-                    start              = start_date,
-                    end                = end_date,
-                    starting_capital   = float(starting_cap),
-                    max_trades_per_day = int(max_per_day),
-                    score_threshold    = int(score_thresh),
-                )
-            except Exception as e:
-                st.error(f"Backtest error after generating data: {e}")
-                return
+        except FileNotFoundError as e:
+            st.error(
+                f"Historical data not found: `{e}`\n\n"
+                f"Run `python backtest/generate_mock_data.py` to generate mock data, "
+                f"or add real CSV files to `data/historical/`."
+            )
+            return
         except Exception as e:
             st.error(f"Backtest error: {e}")
             return
@@ -1053,6 +1049,7 @@ def _render_backtest_panel():
                 "entry_price", "exit_price", "pnl", "return_pct",
                 "exit_reason", "days_held", "vga_environment", "score",
             ]
+            df = pd.DataFrame(st_)[[c for c in display_cols if c in df.columns if c in df.columns]]
             df2 = pd.DataFrame([{c: t.get(c, "") for c in display_cols} for t in st_])
             st.dataframe(df2, use_container_width=True, hide_index=True)
 
@@ -1332,7 +1329,7 @@ def _render_analytics_panel() -> None:
 
 
 # ─────────────────────────────────────────────
-# PORTFOLIO RUNNER PANEL
+# PORTFOLIO RUNNER PANEL (for multi-symbol runs)
 # ─────────────────────────────────────────────
 
 def _render_portfolio_panel() -> None:
@@ -1426,6 +1423,15 @@ def _render_portfolio_panel() -> None:
                 f"risk=${t.get('_risk',0):.0f} | "
                 f"contracts={t.get('contracts',1)}"
             )
+
+    # ── Lifecycle signals from open cal/diag positions ───────────────────────
+    for sym_block in output.get("symbols", []):
+        eng = sym_block.get("engine_output", {})
+        lifecycle = eng.get("positions", {}).get("calendar_diagonal_lifecycle", [])
+        if lifecycle:
+            st.divider()
+            st.caption(f"📅 {sym_block['symbol']} calendar/diagonal lifecycle:")
+            _render_lifecycle_signals(eng.get("positions", {}))
 
     # Raw output expander
     with st.expander(f"Raw output — {meta['run_id']}"):
@@ -1803,7 +1809,7 @@ def _render_governance_panel() -> None:
 
 
 # ─────────────────────────────────────────────
-# SYSTEM PANEL
+# SYSTEM PANEL — health check + bootstrap + deployment packet + release manifest
 # ─────────────────────────────────────────────
 
 def _render_system_panel() -> None:
@@ -2093,12 +2099,6 @@ def _render_live_data_panel() -> None:
                 unsafe_allow_html=True,
             )
 
-        lifecycle = eng.get("positions", {}).get("calendar_diagonal_lifecycle", [])
-        if lifecycle:
-            st.divider()
-            st.caption(f"📅 {sym_block['symbol']} calendar/diagonal lifecycle:")
-            _render_lifecycle_signals(eng.get("positions", {}))
-
     # Alerts
     high_alerts = [a for a in output.get("alerts",[]) if a.get("severity") in ("HIGH","CRITICAL")]
     if high_alerts:
@@ -2196,7 +2196,7 @@ def _render_lifecycle_signals(snapshot: dict) -> None:
 
 
 # ─────────────────────────────────────────────
-# HARVEST VIEW PANELS (v26)
+# HARVEST VIEW — positions tab upgrade
 # ─────────────────────────────────────────────
 
 def _harvest_badge_html(badge: str) -> str:
@@ -2396,7 +2396,3 @@ def _render_portfolio_harvest_panel(portfolio_output: dict) -> None:
                 f'`{sym} {strat}` — roll credit **${cred:.2f}** | flip: {flip}',
                 unsafe_allow_html=True,
             )
-
-
-if __name__ == "__main__":
-    main()
