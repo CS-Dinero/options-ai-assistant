@@ -675,8 +675,8 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab = st.tabs([
-        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics"
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab = st.tabs([
+        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio"
     ])
 
     with pos_tab:
@@ -690,6 +690,9 @@ def main():
 
     with analytics_tab:
         _render_analytics_panel()
+
+    with portfolio_tab:
+        _render_portfolio_panel()
 
 
 # ─────────────────────────────────────────────
@@ -1298,6 +1301,107 @@ def _render_analytics_panel() -> None:
                 file_name="backtest_runs.csv", mime="text/csv",
                 use_container_width=True,
             )
+
+
+# ─────────────────────────────────────────────
+# PORTFOLIO RUNNER PANEL
+# ─────────────────────────────────────────────
+
+def _render_portfolio_panel() -> None:
+    """Inline portfolio runner — runs multi-symbol engine from the dashboard."""
+    from engines.portfolio_runner import run_portfolio_engine
+    from data.mock_data import load_mock_market, build_mock_chain
+
+    st.markdown("**Multi-symbol portfolio run**")
+    st.caption("Runs the full engine across symbols, allocates risk, and surfaces roll + alert signals.")
+
+    symbols_input = st.text_input("Symbols (comma-separated)", value="SPY", key="portfolio_symbols")
+    col1, col2, col3 = st.columns(3)
+    log_events  = col1.checkbox("Log backtest events", value=False, key="portfolio_log_events")
+    log_journal = col2.checkbox("Log execution journal", value=False, key="portfolio_log_journal")
+    log_alerts  = col3.checkbox("Log alerts CSV", value=False, key="portfolio_log_alerts")
+
+    if not st.button("▶ Run Portfolio Engine", type="primary", key="portfolio_run_btn"):
+        st.info("Configure and click Run.")
+        return
+
+    symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
+    payloads = []
+    for sym in symbols:
+        # Use mock data — replace with live provider call here
+        m = load_mock_market()
+        m["symbol"] = sym
+        payloads.append({"symbol": sym, "market": m, "chain": build_mock_chain()})
+
+    with st.spinner("Running portfolio engine…"):
+        output = run_portfolio_engine(
+            payloads,
+            log_backtest_events=log_events,
+            log_execution_journal=log_journal,
+            log_alerts=log_alerts,
+        )
+
+    meta  = output["portfolio_meta"]
+    alloc = output["allocation"]
+
+    # Summary metrics
+    m1,m2,m3,m4,m5,m6 = st.columns(6)
+    m1.metric("Symbols",   meta["symbols_processed"])
+    m2.metric("Ranked",    meta["total_ranked_trades"])
+    m3.metric("Selected",  meta["selected_trades"])
+    m4.metric("Rejected",  meta["rejected_trades"])
+    m5.metric("Open Pos",  meta["total_open_positions"])
+    m6.metric("Budget Used", f"${alloc['used_risk_budget']:,.0f}")
+
+    st.divider()
+
+    # Alerts panel
+    alerts = output.get("alerts", [])
+    if alerts:
+        from engines.alert_router import _SEV_ORDER
+        high_alerts = [a for a in alerts if _SEV_ORDER.get(a.get("severity","INFO"),0) >= 3]
+        if high_alerts:
+            st.markdown("#### 🔴 High Priority Alerts")
+            for a in high_alerts[:5]:
+                st.error(f"**{a['title']}** — {a['message']}")
+        med_alerts = [a for a in alerts if _SEV_ORDER.get(a.get("severity","INFO"),0) == 2]
+        if med_alerts:
+            st.markdown("#### 🟡 Medium Priority")
+            for a in med_alerts[:5]:
+                st.warning(f"**{a['title']}** — {a['message']}")
+
+    st.divider()
+
+    # Roll suggestions
+    rolls = output.get("roll_suggestions", [])
+    if rolls:
+        st.markdown("#### 📋 Roll Suggestions")
+        for r in rolls:
+            action  = r.get("action","HOLD")
+            urgency = r.get("urgency","LOW")
+            color   = {"HIGH":"🔴","MEDIUM":"🟡","LOW":"🟢"}.get(urgency,"⚪")
+            st.markdown(
+                f"{color} **{r.get('symbol','')} {r.get('strategy','').replace('_',' ').title()}** "
+                f"→ `{action}` — {r.get('rationale','')[:80]}"
+            )
+
+    st.divider()
+
+    # Selected trades
+    selected = alloc.get("selected_trades", [])
+    if selected:
+        st.markdown("#### ✅ Selected Trades")
+        for t in selected:
+            st.markdown(
+                f"**{t.get('symbol','')} {str(t.get('strategy_type',t.get('strategy',''))).replace('_',' ').title()}** "
+                f"score={t.get('confidence_score',t.get('score',0)):.0f} | "
+                f"risk=${t.get('_risk',0):.0f} | "
+                f"contracts={t.get('contracts',1)}"
+            )
+
+    # Raw output expander
+    with st.expander(f"Raw output — {meta['run_id']}"):
+        st.json(meta)
 
 
 if __name__ == "__main__":
