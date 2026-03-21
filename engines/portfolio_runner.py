@@ -73,6 +73,10 @@ def run_portfolio_engine(
     alerts_path:            str           = "logs/alerts.csv",
     log_rolls:              bool          = False,
     rolls_path:             str           = "logs/roll_suggestions.csv",
+    persist_state:          bool          = False,
+    state_dir:              str           = "state",
+    snapshot_history:       bool          = False,
+    snapshots_dir:          str           = "snapshots",
     run_id:                 str | None    = None,
 ) -> dict[str, Any]:
     """
@@ -195,6 +199,40 @@ def run_portfolio_engine(
         try:
             from engines.roll_logger import RollLogger
             RollLogger(path=_cloud(rolls_path)).append_many(all_roll_inputs)
+        except Exception:
+            pass
+
+    # ── State persistence ─────────────────────────────────────────────────────
+    if persist_state:
+        try:
+            from engines.state_store import StateStore
+            store = StateStore(base_dir=state_dir)
+            store.save_portfolio_state(output, metadata={"run_id": active_run_id})
+            store.save_alerts_state({"alerts": alert_dicts}, metadata={"run_id": active_run_id})
+            for sym_block in symbol_results:
+                sym = sym_block["symbol"]
+                store.save_named_snapshot(
+                    f"engine_state_{sym}",
+                    sym_block["engine_output"],
+                    metadata={"run_id": active_run_id, "symbol": sym},
+                )
+        except Exception:
+            pass
+
+    # ── Snapshot history ──────────────────────────────────────────────────────
+    if snapshot_history:
+        try:
+            from engines.snapshot_manager import SnapshotManager
+            snap = SnapshotManager(base_dir=snapshots_dir)
+            snap.save_snapshot(category="portfolio", name=f"portfolio_{active_run_id}",
+                               payload=output, metadata={"run_id": active_run_id})
+            snap.save_snapshot(category="alerts", name=f"alerts_{active_run_id}",
+                               payload={"alerts": alert_dicts}, metadata={"run_id": active_run_id})
+            for sym_block in symbol_results:
+                sym = sym_block["symbol"]
+                snap.save_snapshot(category="engine", name=f"{sym}_{active_run_id}",
+                                   payload=sym_block["engine_output"],
+                                   metadata={"run_id": active_run_id, "symbol": sym})
         except Exception:
             pass
 

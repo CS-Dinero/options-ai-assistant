@@ -675,8 +675,8 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab = st.tabs([
-        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio"
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab = st.tabs([
+        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer"
     ])
 
     with pos_tab:
@@ -693,6 +693,9 @@ def main():
 
     with portfolio_tab:
         _render_portfolio_panel()
+
+    with optimizer_tab:
+        _render_optimizer_panel()
 
 
 # ─────────────────────────────────────────────
@@ -1402,6 +1405,137 @@ def _render_portfolio_panel() -> None:
     # Raw output expander
     with st.expander(f"Raw output — {meta['run_id']}"):
         st.json(meta)
+
+
+# ─────────────────────────────────────────────
+# OPTIMIZER PANEL
+# ─────────────────────────────────────────────
+
+def _render_optimizer_panel() -> None:
+    """🧠 Optimizer tab — strategy outcomes, rejection diagnostics, allocation recommendations."""
+    import os
+    from engines.optimizer_report import build_optimizer_report
+
+    if os.path.exists("/mount/src"):
+        bt_path  = "/tmp/options_ai_logs/backtest_events.csv"
+        ex_path  = "/tmp/options_ai_logs/execution_journal.csv"
+        roll_path = "/tmp/options_ai_logs/roll_suggestions.csv"
+        snap_dir  = "/tmp/options_ai_snapshots"
+    else:
+        bt_path   = "logs/backtest_events.csv"
+        ex_path   = "logs/execution_journal.csv"
+        roll_path = "logs/roll_suggestions.csv"
+        snap_dir  = "snapshots"
+
+    report  = build_optimizer_report(
+        backtest_events_path=bt_path,
+        execution_journal_path=ex_path,
+        roll_log_path=roll_path,
+        snapshots_dir=snap_dir,
+    )
+    summary = report["summary"]
+
+    # ── Summary cards ─────────────────────────────────────────────────────────
+    best_s = summary.get("best_strategy", {})
+    top_r  = summary.get("dominant_rejection_reason", {})
+    top_sym = summary.get("best_symbol_candidate", {})
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Best Strategy",    best_s.get("strategy","—"),
+              delta=f"expectancy ${best_s.get('expectancy',0):.2f}" if best_s else None)
+    c2.metric("Top Rejection",    top_r.get("reject_reason", top_r.get("reason","—")),
+              delta=f"{top_r.get('count',0)} occurrences" if top_r else None)
+    c3.metric("Best Symbol",      top_sym.get("symbol","—"),
+              delta=top_sym.get("allocation_action","—") if top_sym else None)
+
+    st.divider()
+
+    # ── Tables ────────────────────────────────────────────────────────────────
+    tabs = st.tabs([
+        "Strategy Outcomes", "Rejection Reasons",
+        "Roll Patterns", "Symbol Allocation", "Snapshot Trend",
+    ])
+
+    sections = [
+        report["strategy_outcomes"],
+        report["rejection_reasons"],
+        report["roll_actions"],
+        report["symbol_allocation"],
+        report["snapshot_changes"],
+    ]
+
+    for tab, df in zip(tabs, sections):
+        with tab:
+            if df is None or df.empty:
+                st.info("No data yet — run the engine with logging enabled to populate this panel.")
+            else:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # ── Session compare ───────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 🔍 Session Compare")
+
+    try:
+        from engines.snapshot_manager import SnapshotManager
+        from engines.session_compare import compare_portfolio_snapshots
+
+        mgr   = SnapshotManager(base_dir=snap_dir)
+        items = mgr.list_snapshots(category="portfolio", limit=20)
+
+        if len(items) < 2:
+            st.caption("Need at least 2 portfolio snapshots. Run the Portfolio tab with snapshot_history=True.")
+        else:
+            labels = [i["filename"] for i in items]
+            col1, col2 = st.columns(2)
+            with col1:
+                old_idx = st.selectbox("Older", range(len(labels)),
+                                       index=min(1, len(labels)-1),
+                                       format_func=lambda i: labels[i],
+                                       key="opt_old")
+            with col2:
+                new_idx = st.selectbox("Newer", range(len(labels)),
+                                       index=0,
+                                       format_func=lambda i: labels[i],
+                                       key="opt_new")
+
+            comparison = compare_portfolio_snapshots(
+                mgr.load_snapshot(items[old_idx]["path"]),
+                mgr.load_snapshot(items[new_idx]["path"]),
+            )
+
+            st.markdown(f"**Old:** `{comparison['old_run_id']}` → **New:** `{comparison['new_run_id']}`")
+
+            md = comparison.get("meta_delta", {})
+            if md:
+                cols = st.columns(min(len(md), 4))
+                for i, (field, vals) in enumerate(md.items()):
+                    delta = vals.get("delta", 0)
+                    cols[i % 4].metric(
+                        field.replace("_", " ").title(),
+                        vals.get("new", "—"),
+                        delta=f"{delta:+.2f}" if delta else None,
+                    )
+
+            for section, data in [
+                ("Selected Trades", comparison["selected_trades"]),
+                ("Roll Suggestions", comparison["roll_suggestions"]),
+            ]:
+                added   = data.get("added", [])
+                removed = data.get("removed", [])
+                changed = data.get("changed", [])
+                if any([added, removed, changed]):
+                    with st.expander(f"{section} — {len(added)} added, {len(removed)} removed, {len(changed)} changed"):
+                        if added:
+                            st.markdown("**Added:**")
+                            st.json([{k: v for k, v in t.items() if k in
+                                      ("symbol","strategy_type","strategy","confidence_score","decision")}
+                                     for t in added[:5]])
+                        if changed:
+                            st.markdown("**Changed:**")
+                            st.json(changed[:5])
+
+    except Exception as e:
+        st.caption(f"Session compare unavailable: {e}")
 
 
 if __name__ == "__main__":
