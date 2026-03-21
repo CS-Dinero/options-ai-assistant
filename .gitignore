@@ -30,3 +30,9 @@ data/historical/gamma/
 
 # Trade logs — local only
 logs/
+
+# Runtime dirs — generated, not tracked
+config_backups/
+deployment_packets/
+snapshots/
+state/

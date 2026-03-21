@@ -675,8 +675,8 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, governance_tab = st.tabs([
-        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance"
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, governance_tab, system_tab = st.tabs([
+        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System"
     ])
 
     with pos_tab:
@@ -699,6 +699,9 @@ def main():
 
     with governance_tab:
         _render_governance_panel()
+
+    with system_tab:
+        _render_system_panel()
 
 
 # ─────────────────────────────────────────────
@@ -1778,6 +1781,121 @@ def _render_governance_panel() -> None:
         )
     else:
         st.caption("No changes logged yet — apply a config patch to start the audit trail.")
+
+
+# ─────────────────────────────────────────────
+# SYSTEM PANEL
+# ─────────────────────────────────────────────
+
+def _render_system_panel() -> None:
+    """⚙️ System tab — health check, bootstrap, deployment packet, release manifest."""
+    import os
+    import tempfile
+    from engines.health_check import run_health_check
+    from engines.bootstrap import bootstrap_environment
+
+    cfg_path  = "config/config.yaml"
+    pkt_dir   = "/tmp/options_ai_packets" if os.path.exists("/mount/src") else "deployment_packets"
+
+    STATUS_COLORS = {"PASS":"#22c55e","WARN":"#f59e0b","FAIL":"#ef4444"}
+
+    # ── Health Check ─────────────────────────────────────────────────────────
+    st.markdown("### 🩺 Health Check")
+    health = run_health_check(config_path=cfg_path)
+    overall = health["overall_status"]
+    color   = STATUS_COLORS.get(overall, "#6b7280")
+
+    h1, h2, h3, h4 = st.columns(4)
+    h1.markdown(f'<div style="background:#0f1117;border:2px solid {color};border-radius:10px;padding:12px;text-align:center"><div style="font-size:11px;color:#9ca3af">Overall</div><div style="font-size:22px;font-weight:700;color:{color}">{overall}</div></div>', unsafe_allow_html=True)
+    h2.metric("Pass",  health["summary"]["pass"])
+    h3.metric("Warn",  health["summary"]["warn"])
+    h4.metric("Fail",  health["summary"]["fail"])
+
+    for check in health["checks"]:
+        c = STATUS_COLORS.get(check["status"],"#6b7280")
+        st.markdown(
+            f'<div style="background:#0f1117;border:1px solid {c}44;border-radius:8px;'
+            f'padding:10px;margin-bottom:6px;display:flex;justify-content:space-between">'
+            f'<div><span style="font-size:13px;font-weight:600;color:#f9fafb">{check["name"]}</span>'
+            f'<br><span style="font-size:11px;color:#9ca3af">{check["message"]}</span></div>'
+            f'<span style="background:{c};color:#fff;padding:2px 10px;border-radius:20px;'
+            f'font-size:11px;font-weight:700;height:fit-content">{check["status"]}</span></div>',
+            unsafe_allow_html=True,
+        )
+
+    if health.get("recommendations"):
+        with st.expander("💡 Recommendations"):
+            for r in health["recommendations"]:
+                st.caption(f"• {r}")
+
+    # ── Bootstrap ────────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 🚀 Bootstrap Environment")
+    st.caption("Idempotent — creates missing folders, seed CSVs, and state files. Never overwrites existing files.")
+
+    if st.button("▶ Run Bootstrap", key="sys_bootstrap"):
+        result = bootstrap_environment(config_path=cfg_path)
+        created  = result["summary"]["created"]
+        existing = result["summary"]["existing"]
+        if created > 0:
+            st.success(f"Bootstrap complete — created {created} files/dirs, found {existing} already present.")
+        else:
+            st.info(f"Environment already fully seeded — {existing} files/dirs verified.")
+        with st.expander("Bootstrap details"):
+            st.json(result, expanded=False)
+        st.rerun()
+
+    # ── Deployment Packet ─────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📦 Deployment Packet")
+    st.caption("Bundles config, governance artifacts, runtime state, and analytics logs into a zip archive.")
+
+    pkt_name    = st.text_input("Packet name", value="release_packet", key="sys_pkt_name")
+    include_zip = st.checkbox("Create zip archive", value=True, key="sys_pkt_zip")
+    full_logs   = st.checkbox("Include full governance logs", value=False, key="sys_pkt_full")
+
+    if st.button("📦 Build Deployment Packet", key="sys_build_pkt"):
+        from engines.deployment_packet import DeploymentPacketBuilder
+        builder = DeploymentPacketBuilder(
+            output_dir=pkt_dir, logs_dir="logs", state_dir="state",
+            snapshots_dir="snapshots", config_path=cfg_path,
+        )
+        with st.spinner("Building packet..."):
+            result = builder.build_packet(
+                packet_name=pkt_name, include_zip=include_zip,
+                include_full_logs=full_logs,
+            )
+        st.success(f"Packet built: `{result['packet_id']}`")
+        if result.get("zip_path") and os.path.exists(result["zip_path"]):
+            st.download_button(
+                "⬇ Download Packet (.zip)",
+                data=open(result["zip_path"],"rb").read(),
+                file_name=f"{pkt_name}.zip", mime="application/zip",
+                use_container_width=True,
+            )
+        with st.expander("Packet manifest"):
+            st.json(result["deployment_manifest"], expanded=False)
+
+    # ── Release Manifest ──────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📋 Release Manifest")
+
+    from engines.release_manifest import ReleaseManifest
+    manifest_path = "/tmp/options_ai_logs/release_manifest.csv" if os.path.exists("/mount/src") else "logs/release_manifest.csv"
+    rm   = ReleaseManifest(path=manifest_path)
+    rows = rm.list_releases(limit=20)
+
+    if rows:
+        import pandas as pd
+        df = pd.DataFrame(rows)[["created_at","release_type","release_name","portfolio_run_id","health_status","notes"]].fillna("")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        labels = [f"{r['created_at'][:19]} · {r['release_type']} · {r['release_name']}" for r in rows]
+        sel    = st.selectbox("Select release", range(len(labels)), format_func=lambda i: labels[i], key="sys_rel_sel")
+        detail = rm.get_release(rows[sel]["release_id"])
+        with st.expander("Release detail"):
+            st.json(detail, expanded=False)
+    else:
+        st.caption("No releases yet — build a deployment packet or run the portfolio engine to create a release entry.")
 
 
 if __name__ == "__main__":
