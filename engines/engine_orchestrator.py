@@ -122,6 +122,21 @@ def run_options_engine(
     if open_positions:
         snapshot["_injected_positions"] = open_positions
 
+    # ── 4b. Calendar/diagonal lifecycle monitor ────────────────────────────────
+    try:
+        from position_manager.calendar_diagonal_adapter import run_lifecycle_monitor
+        cal_rows = snapshot.get("calendar_diagonal", [])
+        if cal_rows:
+            lifecycle = run_lifecycle_monitor(cal_rows, derived=derived, market=market)
+            snapshot["calendar_diagonal_lifecycle"] = lifecycle
+            snapshot["lifecycle_high_urgency"] = [s for s in lifecycle if s.get("urgency") == "HIGH"]
+        else:
+            snapshot["calendar_diagonal_lifecycle"] = []
+            snapshot["lifecycle_high_urgency"] = []
+    except Exception:
+        snapshot["calendar_diagonal_lifecycle"] = []
+        snapshot["lifecycle_high_urgency"] = []
+
     # ── 5. Summary ────────────────────────────────────────────────────────────
     from config.settings import SCORE_STRONG, SCORE_TRADABLE
     strong   = [c for c in candidates if c.get("confidence_score", 0) >= SCORE_STRONG]

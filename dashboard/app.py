@@ -2076,6 +2076,12 @@ def _render_live_data_panel() -> None:
                 unsafe_allow_html=True,
             )
 
+        lifecycle = eng.get("positions", {}).get("calendar_diagonal_lifecycle", [])
+        if lifecycle:
+            st.divider()
+            st.caption(f"📅 {sym_block['symbol']} calendar/diagonal lifecycle:")
+            _render_lifecycle_signals(eng.get("positions", {}))
+
     # Alerts
     high_alerts = [a for a in output.get("alerts",[]) if a.get("severity") in ("HIGH","CRITICAL")]
     if high_alerts:
@@ -2099,6 +2105,77 @@ def _render_live_data_panel() -> None:
 
     with st.expander(f"Raw output — {meta['run_id'][:30]}"):
         st.json(meta)
+
+
+# ─────────────────────────────────────────────
+# CALENDAR/DIAGONAL LIFECYCLE PANEL
+# ─────────────────────────────────────────────
+
+def _render_lifecycle_signals(snapshot: dict) -> None:
+    """
+    Renders calendar/diagonal lifecycle signals from the position monitor.
+    Called from within the Positions tab when lifecycle data is present.
+    """
+    lifecycle = snapshot.get("calendar_diagonal_lifecycle", [])
+    if not lifecycle:
+        return
+
+    st.divider()
+    st.markdown("### 📅 Calendar / Diagonal Lifecycle")
+
+    ACTION_COLORS = {
+        "HOLD":                 "#374151",
+        "ROLL_SHORT":           "#7c3aed",
+        "ROLL_DIAGONAL_SHORT":  "#7c3aed",
+        "CONVERT_TO_DIAGONAL":  "#16a34a",
+        "EXIT_LONG_WINDOW":     "#dc2626",
+        "EXIT_STRUCTURE_BREAK": "#dc2626",
+        "EXIT_ENVIRONMENT":     "#dc2626",
+        "ENTER_CALENDAR":       "#2563eb",
+    }
+    URGENCY_COLORS = {"HIGH": "#dc2626", "MEDIUM": "#f59e0b", "LOW": "#6b7280"}
+
+    for sig in lifecycle:
+        action  = sig.get("action", "HOLD")
+        urgency = sig.get("urgency", "LOW")
+        sym     = sig.get("symbol", "—")
+        struct  = sig.get("structure_type", "calendar")
+        acolor  = ACTION_COLORS.get(action, "#374151")
+        ucolor  = URGENCY_COLORS.get(urgency, "#6b7280")
+        dec     = sig.get("decision", {})
+
+        st.markdown(
+            f'<div style="background:#0f1117;border:1px solid {acolor}66;'
+            f'border-radius:10px;padding:12px;margin-bottom:8px">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center">'
+            f'<div><span style="font-size:14px;font-weight:700;color:#f9fafb">'
+            f'{sym} {struct.title()}</span>'
+            f'<span style="margin-left:8px;font-size:11px;color:#9ca3af">'
+            f'long ${sig.get("long_strike",0):.0f} / short ${sig.get("short_strike",0):.0f} | '
+            f'long {sig.get("long_dte",0)} DTE / short {sig.get("short_dte",0)} DTE</span></div>'
+            f'<div style="display:flex;gap:8px">'
+            f'<span style="background:{ucolor};color:#fff;padding:2px 10px;'
+            f'border-radius:20px;font-size:10px;font-weight:700">{urgency}</span>'
+            f'<span style="background:{acolor};color:#fff;padding:2px 10px;'
+            f'border-radius:20px;font-size:10px;font-weight:700">{action.replace("_"," ")}</span>'
+            f'</div></div>'
+            f'<div style="font-size:11px;color:#9ca3af;margin-top:6px">'
+            f'{dec.get("rationale","")}</div>'
+            f'{"<div style=font-size:11px;color:#6b7280;margin-top:4px>" + dec.get("notes","") + "</div>" if dec.get("notes") else ""}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Show target strikes for actionable decisions
+        if action not in ("HOLD", "NO_ACTION") and dec.get("target_short_strike"):
+            cols = st.columns(4)
+            cols[0].metric("Target Short", f'${dec["target_short_strike"]:.0f}')
+            if dec.get("target_long_strike"):
+                cols[1].metric("Target Long",  f'${dec["target_long_strike"]:.0f}')
+            if dec.get("target_short_dte"):
+                cols[2].metric("Target S-DTE", dec["target_short_dte"])
+            if dec.get("target_long_dte"):
+                cols[3].metric("Target L-DTE", dec["target_long_dte"])
 
 
 if __name__ == "__main__":
