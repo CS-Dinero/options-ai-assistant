@@ -267,6 +267,8 @@ def render_sidebar() -> tuple[str, str]:
             st.rerun()
 
         st.divider()
+        st.caption("⚙️ [Operator Console](operator_dashboard_app.py)")
+        st.divider()
         st.markdown(
             '<p style="font-size:11px;color:#6b7280">Data cached 5 min.<br>'
             'Greeks delayed 15 min on Starter plan.<br>'
