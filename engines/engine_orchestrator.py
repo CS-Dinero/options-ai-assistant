@@ -64,6 +64,10 @@ def run_options_engine(
 
     vga = derived.get("vga_environment", "mixed")
 
+    # ── 1b. Regime classification ──────────────────────────────────────────────
+    from engines.regime_router import classify_regime, adjust_score_for_regime
+    regime = classify_regime(derived)
+
     # ── 2. Generate and rank candidates ───────────────────────────────────────
     from strategies.bear_call      import generate_bear_call_spreads
     from strategies.bull_put       import generate_bull_put_spreads
@@ -89,6 +93,18 @@ def run_options_engine(
             pass
 
     candidates.sort(key=lambda c: c.get("confidence_score", 0), reverse=True)
+
+    # ── 2b. Regime-aware score adjustment and filtering ────────────────────────
+    adjusted = []
+    for c in candidates:
+        st_type = c.get("strategy_type", "")
+        if not regime.strategy_allowed(st_type):
+            continue
+        c["confidence_score"] = adjust_score_for_regime(
+            c.get("confidence_score", 0), st_type, regime
+        )
+        adjusted.append(c)
+    candidates = sorted(adjusted, key=lambda c: c.get("confidence_score", 0), reverse=True)
 
     # ── 3. Apply contract sizing ───────────────────────────────────────────────
     from calculator.risk_engine import compute_contracts
@@ -134,4 +150,5 @@ def run_options_engine(
         "summary":    summary,
         "derived":    derived,
         "market":     market,
+        "regime":     regime.to_dict(),
     }
