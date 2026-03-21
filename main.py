@@ -44,6 +44,7 @@ from strategies.bull_call_debit import generate_bull_call_debit_spreads
 from strategies.bear_put_debit  import generate_bear_put_debit_spreads
 from strategies.calendar        import generate_calendar_candidates
 from strategies.diagonal        import generate_diagonal_candidates
+from strategies.double_diagonal import generate_double_diagonal_candidates
 
 from calculator.trade_scoring import rank_candidates
 
@@ -296,6 +297,7 @@ def generate_all_candidates(
     candidates += generate_bear_put_debit_spreads(market, chain, derived)
     candidates += generate_calendar_candidates(market, chain, derived)
     candidates += generate_diagonal_candidates(market, chain, derived)
+    candidates += generate_double_diagonal_candidates(market, chain, derived)
     return rank_candidates(candidates)
 
 

@@ -675,7 +675,9 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab = st.tabs(["📍 Positions", "📋 Trade Log & Export", "🔬 Backtest"])
+    pos_tab, tlog_tab, bt_tab, analytics_tab = st.tabs([
+        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics"
+    ])
 
     with pos_tab:
         _render_positions_panel(derived, market)
@@ -685,6 +687,9 @@ def main():
 
     with bt_tab:
         _render_backtest_panel()
+
+    with analytics_tab:
+        _render_analytics_panel()
 
 
 # ─────────────────────────────────────────────
@@ -1182,6 +1187,117 @@ short_strike, long_strike, short_expiration, long_expiration,
 short_dte, long_dte, entry_price, spot_open
 ```
         """)
+
+
+# ─────────────────────────────────────────────
+# ANALYTICS PANEL
+# ─────────────────────────────────────────────
+
+def _render_analytics_panel() -> None:
+    """
+    📈 Analytics tab — reads backtest_events.csv + backtest_runs.csv
+    and renders win rate, expectancy, rejection analysis, and regime performance.
+    """
+    import os
+    from pathlib import Path
+    from backtest.metrics_reader import (
+        load_events, load_runs, summary_stats,
+        by_symbol, by_regime, rejection_reasons, by_strategy,
+        selection_rate_by_regime,
+    )
+
+    # Cloud-safe paths
+    if os.path.exists("/mount/src"):
+        events_path = "/tmp/options_ai_logs/backtest_events.csv"
+        runs_path   = "/tmp/options_ai_logs/backtest_runs.csv"
+    else:
+        events_path = "logs/backtest_events.csv"
+        runs_path   = "logs/backtest_runs.csv"
+
+    events_df = load_events(events_path)
+    runs_df   = load_runs(runs_path)
+
+    if events_df.empty:
+        st.info(
+            "No analytics data yet.\n\n"
+            "Analytics are populated automatically every time the engine runs "
+            "with `log_backtest_events=True`. Run the backtest tab or the portfolio "
+            "runner to start building your dataset."
+        )
+        return
+
+    st.markdown("### 📊 Event Summary")
+    stats = summary_stats(events_df)
+    s1, s2, s3, s4, s5, s6, s7, s8 = st.columns(8)
+    s1.metric("Total Events",      stats["total_events"])
+    s2.metric("Ranked",            stats["ranked_trades"])
+    s3.metric("Selected",          stats["selected_trades"])
+    s4.metric("Rejected",          stats["rejected_trades"])
+    s5.metric("Position Actions",  stats["position_actions"])
+    s6.metric("Avg Ranked Score",  stats["avg_ranked_score"])
+    s7.metric("Avg Selected Score",stats["avg_selected_score"])
+    s8.metric("Est. Position P&L", f"${stats['estimated_position_pnl']:.2f}")
+
+    st.divider()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**By Symbol**")
+        sym_df = by_symbol(events_df)
+        if not sym_df.empty:
+            st.dataframe(sym_df, use_container_width=True, hide_index=True)
+
+        st.markdown("**By VGA Regime**")
+        regime_df = by_regime(events_df)
+        if not regime_df.empty:
+            st.dataframe(regime_df, use_container_width=True, hide_index=True)
+
+    with col2:
+        st.markdown("**Rejection Reasons**")
+        rej_df = rejection_reasons(events_df)
+        if not rej_df.empty:
+            st.dataframe(rej_df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No rejections logged yet.")
+
+        st.markdown("**Selection Rate by Regime**")
+        rate_df = selection_rate_by_regime(events_df)
+        if not rate_df.empty:
+            st.dataframe(rate_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    st.markdown("**By Strategy**")
+    strat_df = by_strategy(events_df)
+    if not strat_df.empty:
+        st.dataframe(strat_df, use_container_width=True, hide_index=True)
+
+    # Run history
+    if not runs_df.empty:
+        st.divider()
+        st.markdown("**Portfolio Run History**")
+        st.dataframe(runs_df.tail(20), use_container_width=True, hide_index=True)
+
+    # Download buttons
+    st.divider()
+    st.markdown("**Download Raw Data**")
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        st.download_button(
+            "⬇ backtest_events.csv",
+            data=open(events_path, "rb").read() if Path(events_path).exists() else b"",
+            file_name="backtest_events.csv", mime="text/csv",
+            use_container_width=True,
+        )
+    with dc2:
+        if Path(runs_path).exists():
+            st.download_button(
+                "⬇ backtest_runs.csv",
+                data=open(runs_path, "rb").read(),
+                file_name="backtest_runs.csv", mime="text/csv",
+                use_container_width=True,
+            )
 
 
 if __name__ == "__main__":
