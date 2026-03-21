@@ -35,15 +35,23 @@ def get_net_liquidation(position: dict[str, Any]) -> float:
     """
     Estimate net liquidation value for a tethered position.
 
-    Uses current_value (mark) - entry_debit (net debit paid).
-    For credit positions, entry is negative so net_liq = mark - |credit received|.
+    Supports two naming conventions:
+      v26:    current_value / mark + entry_debit_credit / avg_price
+      v26.1:  long_leg_mid / short_leg_mid (tethered spread mark)
+
     Returns positive = gain, negative = loss.
     """
+    # v26.1 spec: tethered leg midpoints
+    long_mid  = _sf(position.get("long_leg_mid"))
+    short_mid = _sf(position.get("short_leg_mid"))
+    if long_mid or short_mid:
+        qty = max(abs(int(_sf(position.get("quantity", 1)))), 1)
+        return round(((long_mid - short_mid) * 100) * qty, 2)
+
+    # v26: current_value / mark vs entry
     mark  = _sf(position.get("current_value") or position.get("mark"))
     entry = _sf(position.get("entry_debit_credit") or position.get("avg_price"))
-    # For debit structures, net_liq = mark - debit paid
-    # For credit structures, entry is negative, net_liq = mark + credit received
-    return round((mark - abs(entry)) * 100, 2)   # per contract, dollar-adjusted
+    return round((mark - abs(entry)) * 100, 2)
 
 
 # ─────────────────────────────────────────────
@@ -68,10 +76,21 @@ def calculate_harvest_credit(
       creditworthy      — True if net >= MIN_ROLL_NET_CREDIT
       action            — HARVEST_GOLD / HARVEST_GREEN / WAIT
     """
-    # Current short mid (cost to close)
-    buyback = _sf(current_pos.get("mark") or current_pos.get("current_short_mid"), 0.0)
+    # Current short mid — support v26 (mark) and v26.1 (current_spread_cost) naming
+    buyback = _sf(current_pos.get("current_spread_cost")
+                  or current_pos.get("mark")
+                  or current_pos.get("current_short_mid"), 0.0)
 
-    # Proposed short premium — from roll_suggestion if available
+    # Proposed short premium — v26.1 uses estimated_new_credit, v26 uses roll_suggestion
+    estimated_new = _sf(current_pos.get("estimated_new_credit"))
+    if estimated_new > 0:
+        net_credit   = round(estimated_new - buyback, 4)
+        creditworthy = net_credit >= MIN_ROLL_NET_CREDIT
+        action = ("HARVEST_GOLD" if net_credit >= GOLD_HARVEST_MIN_CREDIT
+                  else "HARVEST_GREEN" if creditworthy else HARVEST_WAIT_LABEL)
+        return {"buyback_cost": round(buyback,4), "gross_credit": round(estimated_new,4),
+                "net_roll_credit": net_credit, "creditworthy": creditworthy, "action": action}
+
     roll_sug     = current_pos.get("roll_suggestion") or {}
     target_mid   = _sf(roll_sug.get("target_short_mid"))
 
@@ -226,12 +245,15 @@ def compute_harvest_badge(
     market_ctx:     dict[str, Any],
     roll_credit:    float,
     flip_rec:       str = "HOLD_STRUCTURE",
+    flip_candidate: bool = False,
 ) -> str:
     """
     Compute the single harvest badge for display in the Positions tab.
 
-    Priority: RED (assignment/trap) > GOLD > GREEN > BLUE (flip) > WAIT > —
+    Priority: RED (assignment/trap) > PURPLE (flip+harvest) > GOLD > GREEN > BLUE (flip) > WAIT > —
+    PURPLE = flip is recommended AND roll credit is harvestable
     """
+    from config.vh_config import BADGE_PURPLE
     spot       = _sf(market_ctx.get("spot_price"))
     trap       = _sf(market_ctx.get("gamma_trap") or market_ctx.get("gamma_trap_strike"))
     assign_ctx = assignment_monitor(position)
@@ -239,6 +261,9 @@ def compute_harvest_badge(
 
     if assign_ctx["at_risk"] or trap_near:
         return BADGE_RED
+    # Purple: flip candidate AND harvestable credit
+    if flip_candidate and roll_credit >= MIN_ROLL_NET_CREDIT:
+        return BADGE_PURPLE
     if roll_credit >= GOLD_HARVEST_MIN_CREDIT:
         return BADGE_GOLD
     if roll_credit >= MIN_ROLL_NET_CREDIT:
@@ -273,7 +298,8 @@ def build_harvest_summary(
     trap        = _sf(market_ctx.get("gamma_trap") or market_ctx.get("gamma_trap_strike"))
     gamma_trap_dist = round(abs(spot - trap) / spot, 4) if spot > 0 and trap > 0 else None
 
-    badge = compute_harvest_badge(position, market_ctx, roll_credit, flip_rec)
+    flip_candidate = bool(position.get("flip_candidate", False))
+    badge = compute_harvest_badge(position, market_ctx, roll_credit, flip_rec, flip_candidate)
 
     return {
         "net_liq":              potential["net_liq"],

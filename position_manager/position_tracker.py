@@ -381,6 +381,17 @@ class PositionTracker:
             enriched["vh_triggers"] = triggers
 
             harvest = build_harvest_summary(enriched, mctx, flip_rec)
+
+            # v26.1: scored flip optimizer
+            try:
+                from engines.flip_optimizer import choose_best_flip
+                flip_opt = choose_best_flip(enriched, mctx)
+                if flip_opt.get("flip_candidate"):
+                    flip_rec = flip_opt["recommendation"]
+            except Exception:
+                flip_opt = {"flip_candidate": False, "recommendation": flip_rec,
+                            "flip_quality_score": 0.0}
+
             enriched.update({
                 "net_liq":              harvest["net_liq"],
                 "harvestable_equity":   harvest["harvestable_equity"],
@@ -388,8 +399,11 @@ class PositionTracker:
                 "harvest_badge":        harvest["harvest_badge"],
                 "gamma_trap_distance":  harvest["gamma_trap_distance"],
                 "flip_recommendation":  flip_rec,
+                "flip_quality_score":   flip_opt.get("flip_quality_score", 0.0),
+                "flip_candidate":       flip_opt.get("flip_candidate", False),
                 "sentiment_score":      sentiment,
                 "harvest_summary":      harvest,
+                "flip_summary":         flip_opt,
             })
         except Exception:
             pass

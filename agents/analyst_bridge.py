@@ -68,19 +68,20 @@ def get_analyst_brief(
     from position_manager.vh_triggers import evaluate_vh_triggers
     from position_manager.harvest_engine import build_harvest_summary
     from engines.sentiment_pivot_engine import recommend_sentiment_pivot
+    from engines.flip_optimizer import choose_best_flip
 
-    # Compute harvest
-    roll_is_credit = True
-    flip_dict = recommend_sentiment_pivot(
-        position, market_ctx,
-        sentiment_score=float(position.get("sentiment_score", 0.0)),
-        roll_is_credit=roll_is_credit,
-    )
-    flip_rec = flip_dict.get("pivot_recommendation", "HOLD_STRUCTURE")
+    # Sentiment pivot (directional gate)
+    sentiment = float(position.get("sentiment_score", 0.0))
+    pivot_dict = recommend_sentiment_pivot(position, market_ctx, sentiment_score=sentiment)
+    flip_rec   = pivot_dict.get("pivot_recommendation", "HOLD_STRUCTURE")
 
     harvest_summary = build_harvest_summary(position, market_ctx, flip_rec)
 
-    # Attach triggers to position for harvest engine reference
+    # Scored flip optimizer (v26.1)
+    flip_opt = choose_best_flip(position, market_ctx)
+    if flip_opt.get("flip_candidate"):
+        flip_rec = flip_opt["recommendation"]
+
     triggers = evaluate_vh_triggers(position, market_ctx)
     position_with_triggers = {**position, "vh_triggers": triggers}
 
@@ -91,6 +92,7 @@ def get_analyst_brief(
         "payload":         payload,
         "harvest_summary": harvest_summary,
         "triggers":        triggers,
-        "flip":            flip_dict,
+        "flip":            flip_opt,
+        "pivot":           pivot_dict,
         "brief":           brief,
     }

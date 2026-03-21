@@ -34,7 +34,8 @@ def _trigger(name: str, fired: bool, severity: str, rationale: str, action: str)
 
 def check_delta_redline(position: dict[str, Any]) -> dict[str, Any]:
     """Short delta approaching ITM territory — harvest or roll immediately."""
-    delta = abs(_sf(position.get("short_delta") or position.get("delta")))
+    # Support both naming conventions: short_delta (v26) and short_leg_delta (v26.1 spec)
+    delta = abs(_sf(position.get("short_leg_delta") or position.get("short_delta") or position.get("delta")))
     fired = delta >= DELTA_REDLINE
     return _trigger(
         "delta_redline", fired,
@@ -89,8 +90,17 @@ def check_gold_harvest(position: dict[str, Any], roll_credit: float) -> dict[str
 
 
 def check_gamma_trap(position: dict[str, Any], trap_price: float) -> dict[str, Any]:
-    """Price proximity to gamma trap wall."""
-    spot  = _sf(position.get("live_spot") or position.get("spot"))
+    """Price proximity to gamma trap wall.
+    Also accepts gamma_trap_distance_pct directly if trap_price not available."""
+    spot  = _sf(position.get("live_spot") or position.get("spot_price") or position.get("spot"))
+    # If position already has distance_pct computed, use it directly
+    if "gamma_trap_distance_pct" in position and trap_price <= 0:
+        dist_pct = abs(_sf(position["gamma_trap_distance_pct"]))
+        fired    = dist_pct <= GAMMA_TRAP_BUFFER
+        return _trigger("gamma_trap", fired,
+                        severity="HIGH" if fired else "OK",
+                        rationale=f"Gamma trap distance {dist_pct:.1%} {'≤' if fired else '>'} {GAMMA_TRAP_BUFFER:.0%} buffer",
+                        action="HARVEST_OR_HEDGE" if fired else "HOLD")
     if spot <= 0 or trap_price <= 0:
         return _trigger("gamma_trap", False, "OK", "Trap or spot not available", "HOLD")
     dist_pct = abs(spot - trap_price) / spot

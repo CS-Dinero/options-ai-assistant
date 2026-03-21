@@ -39,3 +39,4 @@ BADGE_RED:    str = "RED"        # gamma trap within GAMMA_TRAP_BUFFER
 BADGE_BLUE:   str = "BLUE"       # flip recommended
 BADGE_WAIT:   str = "WAIT"       # no creditworthy roll available
 BADGE_NONE:   str = "—"
+BADGE_PURPLE: str = "PURPLE"  # flip candidate + harvestable (Gold or Green)
