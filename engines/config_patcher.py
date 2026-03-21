@@ -1,16 +1,10 @@
 """
 engines/config_patcher.py
-Safe config mutation with preview, backup, selective application, and confidence gating.
+Safe config mutation: preview, backup, governance enforcement, audit logging.
 
-Closes the loop:
-  logs → analytics → optimizer → tuner → config_patcher → config.yaml
-
-Usage:
-    tuning = tune_parameters(...)
-    preview = preview_config_patch(config_path=..., tuning_payload=tuning.to_dict(), min_confidence=0.65)
-    result  = apply_config_patch(config_path=..., tuning_payload=tuning.to_dict(), min_confidence=0.70)
-
-IMPORTANT: apply_config_patch modifies config.yaml. Always use make_backup=True in production.
+Closes the governance loop:
+  tuner → governance_guard → approval_queue → config_patcher → config.yaml
+        → change_audit
 """
 from __future__ import annotations
 
@@ -46,17 +40,13 @@ def _deep_set(cfg: dict[str, Any], dotted: str, value: Any) -> None:
     node[parts[-1]] = value
 
 
-# ─────────────────────────────────────────────
-# RESULT TYPES
-# ─────────────────────────────────────────────
-
 @dataclass
 class PatchPreview:
-    parameter:  str
-    old_value:  Any
-    new_value:  Any
-    changed:    bool
-    status:     str   # READY | NO_CHANGE | SKIPPED_NOT_SELECTED | SKIPPED_LOW_CONFIDENCE | APPLIED
+    parameter: str
+    old_value: Any
+    new_value: Any
+    changed:   bool
+    status:    str  # READY|NO_CHANGE|APPLIED|SKIPPED_*|REJECTED_*
 
 
 @dataclass
@@ -74,17 +64,13 @@ class PatchResult:
                 "notes": self.notes}
 
 
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
-
-def _find_config(config_path: str) -> str:
-    if os.path.exists(config_path):
-        return config_path
-    fallback = str(Path(__file__).parent.parent / "config" / "config.yaml")
-    if os.path.exists(fallback):
-        return fallback
-    raise FileNotFoundError(f"Config not found: {config_path}")
+def _find_config(p: str) -> str:
+    if os.path.exists(p):
+        return p
+    fb = str(Path(__file__).parent.parent / "config" / "config.yaml")
+    if os.path.exists(fb):
+        return fb
+    raise FileNotFoundError(f"Config not found: {p}")
 
 
 def load_config(config_path: str = "config/config.yaml") -> dict[str, Any]:
@@ -106,97 +92,114 @@ def backup_config(config_path: str, backup_dir: str = "config_backups") -> str:
 
 
 def normalize_tuner_suggestions(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        {
-            "parameter":       str(s.get("parameter", "")),
-            "current_value":   s.get("current_value"),
-            "suggested_value": s.get("suggested_value"),
-            "confidence":      float(s.get("confidence", 0.0)),
-            "direction":       str(s.get("direction", "")),
-            "rationale":       str(s.get("rationale", "")),
-        }
-        for s in payload.get("suggestions", [])
-        if s.get("parameter")
-    ]
+    return [{"parameter":       str(s.get("parameter","")),
+             "current_value":   s.get("current_value"),
+             "suggested_value": s.get("suggested_value"),
+             "confidence":      float(s.get("confidence",0.0)),
+             "direction":       str(s.get("direction","")),
+             "rationale":       str(s.get("rationale","")),
+             }
+            for s in payload.get("suggestions",[]) if s.get("parameter")]
 
 
-# ─────────────────────────────────────────────
-# PREVIEW
-# ─────────────────────────────────────────────
+def build_tuning_payload_from_queue_requests(
+    queue_requests: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Convert ApprovalQueue approved rows into a tuning_payload for apply_config_patch."""
+    return {
+        "summary": {"source": "approval_queue"},
+        "suggestions": [
+            {"parameter":       s.get("parameter",""),
+             "current_value":   s.get("current_value"),
+             "suggested_value": s.get("requested_value"),
+             "confidence":      float(s.get("confidence",0.0)),
+             "direction":       str(s.get("direction","")),
+             "rationale":       str(s.get("rationale","")),
+             "evidence":        s.get("evidence",{})}
+            for s in queue_requests
+        ],
+    }
+
+
+def _gov_map(cfg: dict, payload: dict) -> dict[str, dict]:
+    try:
+        from engines.governance_guard import evaluate_patch_payload
+        gov = evaluate_patch_payload(config=cfg, tuning_payload=payload)
+        return {x["parameter"]: x for x in gov.get("all",[])}
+    except Exception:
+        return {}
+
 
 def preview_config_patch(
     *,
-    config_path:         str,
-    tuning_payload:      dict[str, Any],
-    include_parameters:  list[str] | None = None,
-    min_confidence:      float = 0.0,
+    config_path:        str,
+    tuning_payload:     dict[str, Any],
+    include_parameters: list[str] | None = None,
+    min_confidence:     float = 0.0,
+    enforce_governance: bool  = True,
 ) -> PatchResult:
     cfg  = load_config(config_path)
     sugs = normalize_tuner_suggestions(tuning_payload)
+    gmap = _gov_map(cfg, tuning_payload) if enforce_governance else {}
     previews: list[PatchPreview] = []
 
     for s in sugs:
-        param = s["parameter"]
-        conf  = s["confidence"]
-        old   = _deep_get(cfg, param)
-        new   = s["suggested_value"]
-
+        param, conf, old, new = s["parameter"], s["confidence"], _deep_get(cfg, s["parameter"]), s["suggested_value"]
         if include_parameters and param not in include_parameters:
-            previews.append(PatchPreview(param, old, new, False, "SKIPPED_NOT_SELECTED"))
-            continue
+            previews.append(PatchPreview(param, old, new, False, "SKIPPED_NOT_SELECTED")); continue
         if conf < min_confidence:
-            previews.append(PatchPreview(param, old, new, False, "SKIPPED_LOW_CONFIDENCE"))
-            continue
-
-        status = "READY" if old != new else "NO_CHANGE"
-        previews.append(PatchPreview(param, old, new, old != new, status))
+            previews.append(PatchPreview(param, old, new, False, "SKIPPED_LOW_CONFIDENCE")); continue
+        gd = gmap.get(param, {})
+        if gd and not gd.get("allowed", True):
+            previews.append(PatchPreview(param, old, new, False, gd.get("status","REJECTED_GOVERNANCE"))); continue
+        previews.append(PatchPreview(param, old, new, old != new, "READY" if old != new else "NO_CHANGE"))
 
     return PatchResult(_find_config(config_path), None, False, previews,
                        [] if previews else ["No suggestions to preview."])
 
 
-# ─────────────────────────────────────────────
-# APPLY
-# ─────────────────────────────────────────────
-
 def apply_config_patch(
     *,
-    config_path:         str,
-    tuning_payload:      dict[str, Any],
-    include_parameters:  list[str] | None = None,
-    min_confidence:      float = 0.0,
-    make_backup:         bool  = True,
-    backup_dir:          str   = "config_backups",
+    config_path:        str,
+    tuning_payload:     dict[str, Any],
+    include_parameters: list[str] | None = None,
+    min_confidence:     float = 0.0,
+    make_backup:        bool  = True,
+    backup_dir:         str   = "config_backups",
+    enforce_governance: bool  = True,
+    audit_log:          bool  = True,
+    audit_path:         str   = "logs/change_audit.csv",
+    source:             str   = "tuner",
+    source_run_id:      str   = "",
+    reviewer:           str   = "",
+    audit_notes:        str   = "",
 ) -> PatchResult:
     real     = _find_config(config_path)
     cfg      = load_config(config_path)
     original = copy.deepcopy(cfg)
     sugs     = normalize_tuner_suggestions(tuning_payload)
+    gmap     = _gov_map(cfg, tuning_payload) if enforce_governance else {}
     previews: list[PatchPreview] = []
     notes:    list[str]          = []
+    blocked  = 0
 
     for s in sugs:
-        param = s["parameter"]
-        conf  = s["confidence"]
-        old   = _deep_get(cfg, param)
-        new   = s["suggested_value"]
-
+        param, conf, old, new = s["parameter"], s["confidence"], _deep_get(cfg, s["parameter"]), s["suggested_value"]
         if include_parameters and param not in include_parameters:
-            previews.append(PatchPreview(param, old, new, False, "SKIPPED_NOT_SELECTED"))
-            continue
+            previews.append(PatchPreview(param, old, new, False, "SKIPPED_NOT_SELECTED")); continue
         if conf < min_confidence:
-            previews.append(PatchPreview(param, old, new, False, "SKIPPED_LOW_CONFIDENCE"))
-            continue
+            previews.append(PatchPreview(param, old, new, False, "SKIPPED_LOW_CONFIDENCE")); continue
+        gd = gmap.get(param, {})
+        if gd and not gd.get("allowed", True):
+            previews.append(PatchPreview(param, old, new, False, gd.get("status","REJECTED_GOVERNANCE")))
+            blocked += 1; continue
         if old == new:
-            previews.append(PatchPreview(param, old, new, False, "NO_CHANGE"))
-            continue
-
+            previews.append(PatchPreview(param, old, new, False, "NO_CHANGE")); continue
         _deep_set(cfg, param, new)
         previews.append(PatchPreview(param, old, new, True, "APPLIED"))
 
     backup_path: str | None = None
     changed = cfg != original
-
     if changed:
         if make_backup:
             backup_path = backup_config(config_path, backup_dir)
@@ -205,5 +208,19 @@ def apply_config_patch(
         notes.append(f"Config updated: {real}")
     else:
         notes.append("No changes applied.")
+    if blocked:
+        notes.append(f"Governance blocked {blocked} change(s).")
 
-    return PatchResult(real, backup_path, changed, previews, notes)
+    result = PatchResult(real, backup_path, changed, previews, notes)
+
+    if audit_log and changed:
+        try:
+            from engines.change_audit import ChangeAudit
+            ChangeAudit(path=audit_path).log_patch_result(
+                patch_result_dict=result.to_dict(), source=source,
+                source_run_id=source_run_id, reviewer=reviewer, notes=audit_notes,
+                tuning_payload=tuning_payload)
+        except Exception:
+            pass
+
+    return result

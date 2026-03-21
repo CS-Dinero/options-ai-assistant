@@ -675,8 +675,8 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab = st.tabs([
-        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer"
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, governance_tab = st.tabs([
+        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance"
     ])
 
     with pos_tab:
@@ -696,6 +696,9 @@ def main():
 
     with optimizer_tab:
         _render_optimizer_panel()
+
+    with governance_tab:
+        _render_governance_panel()
 
 
 # ─────────────────────────────────────────────
@@ -1643,6 +1646,138 @@ def _render_tuner_patcher_inline(bt_path: str, ex_path: str, roll_path: str) -> 
             else:
                 st.info(f"No changes applied. {result.notes}")
             st.json(result.to_dict(), expanded=False)
+
+
+# ─────────────────────────────────────────────
+# GOVERNANCE PANEL
+# ─────────────────────────────────────────────
+
+def _render_governance_panel() -> None:
+    """🛡 Governance tab — policy table, approval queue, change audit."""
+    import os
+    from engines.governance_guard import build_governance_policy_summary, evaluate_patch_payload
+    from engines.parameter_tuner import tune_parameters
+    from engines.approval_queue import ApprovalQueue
+    from engines.change_audit import ChangeAudit
+    from engines.config_patcher import (
+        load_config, build_tuning_payload_from_queue_requests, apply_config_patch,
+    )
+
+    cfg_path   = "config/config.yaml"
+    queue_path = "/tmp/options_ai_logs/approval_queue.csv" if os.path.exists("/mount/src") else "logs/approval_queue.csv"
+    audit_path = "/tmp/options_ai_logs/change_audit.csv"  if os.path.exists("/mount/src") else "logs/change_audit.csv"
+    bt_path    = "/tmp/options_ai_logs/backtest_events.csv"   if os.path.exists("/mount/src") else "logs/backtest_events.csv"
+    ex_path    = "/tmp/options_ai_logs/execution_journal.csv" if os.path.exists("/mount/src") else "logs/execution_journal.csv"
+    roll_path  = "/tmp/options_ai_logs/roll_suggestions.csv"  if os.path.exists("/mount/src") else "logs/roll_suggestions.csv"
+    backup_dir = "/tmp/options_ai_config_backups" if os.path.exists("/mount/src") else "config_backups"
+
+    # ── Policy table ──────────────────────────────────────────────────────────
+    st.markdown("### 📋 Governance Policy")
+    policy = build_governance_policy_summary()
+    st.dataframe(policy, use_container_width=True, hide_index=True)
+
+    # ── Approval queue ────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### ✅ Approval Queue")
+
+    queue = ApprovalQueue(path=queue_path)
+    pending  = queue.pending_requests()
+    approved = queue.approved_requests()
+
+    c1, c2 = st.columns(2)
+    c1.metric("Pending",  len(pending))
+    c2.metric("Approved", len(approved))
+
+    if st.button("🔄 Generate New Requests from Tuner", key="gov_generate"):
+        try:
+            cfg        = load_config(cfg_path)
+            tuning     = tune_parameters(
+                backtest_events_path=bt_path,
+                execution_journal_path=ex_path,
+                roll_log_path=roll_path,
+            )
+            payload    = tuning.to_dict()
+            governed   = evaluate_patch_payload(config=cfg, tuning_payload=payload)
+            created    = queue.create_many_from_governed_suggestions(
+                governance_payload=governed, approved_only=True,
+                source_run_id="dashboard_manual",
+            )
+            st.success(f"Staged {len(created)} governance-approved request(s) into queue.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Could not generate requests: {e}")
+
+    if pending:
+        st.markdown("**Pending requests:**")
+        for item in pending:
+            with st.container():
+                col_left, col_right = st.columns([3,1])
+                with col_left:
+                    st.markdown(
+                        f'`{item.get("parameter","—")}` '
+                        f'`{item.get("current_value","—")}` → '
+                        f'`{item.get("requested_value","—")}` '
+                        f'({int(float(item.get("confidence",0))*100)}% conf)'
+                    )
+                    st.caption(item.get("rationale",""))
+                with col_right:
+                    reviewer_name = st.text_input("Reviewer", key=f"gov_rev_{item['request_id']}", label_visibility="collapsed", placeholder="Reviewer")
+                    a_col, r_col = st.columns(2)
+                    if a_col.button("✓", key=f"gov_approve_{item['request_id']}", help="Approve"):
+                        queue.approve(item["request_id"], reviewer=reviewer_name)
+                        st.rerun()
+                    if r_col.button("✗", key=f"gov_reject_{item['request_id']}", help="Reject"):
+                        queue.reject(item["request_id"], reviewer=reviewer_name)
+                        st.rerun()
+
+    # ── Apply approved queue ──────────────────────────────────────────────────
+    if approved:
+        st.markdown("**Approved — ready to apply:**")
+        for item in approved:
+            st.markdown(f"✅ `{item.get('parameter','—')}` → `{item.get('requested_value','—')}`"
+                        f" (approved by `{item.get('reviewer','—')}`)")
+
+        reviewer_apply = st.text_input("Your name (for audit log)", key="gov_reviewer_apply")
+        if st.button("⚡ Apply Approved Queue to Config", type="primary", key="gov_apply"):
+            payload  = build_tuning_payload_from_queue_requests(approved)
+            result   = apply_config_patch(
+                config_path=cfg_path, tuning_payload=payload,
+                include_parameters=[x["parameter"] for x in approved],
+                min_confidence=0.0, make_backup=True, backup_dir=backup_dir,
+                enforce_governance=True, audit_log=True, audit_path=audit_path,
+                source="queue", reviewer=reviewer_apply,
+            )
+            if result.applied:
+                for req in approved:
+                    queue.mark_applied(req["request_id"], reviewer=reviewer_apply,
+                                       review_notes="Applied via governance panel.")
+                st.success(f"Applied. Notes: {result.notes}")
+            else:
+                st.info(f"No changes. Notes: {result.notes}")
+            st.json(result.to_dict(), expanded=False)
+
+    # ── Change audit ──────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📜 Change Audit Log")
+
+    audit  = ChangeAudit(path=audit_path)
+    summary = audit.summary()
+    a1, a2, a3 = st.columns(3)
+    a1.metric("Total Changes",    summary.get("total_changes", 0))
+    a2.metric("Last Change",      str(summary.get("last_change","—"))[:19] if summary.get("last_change") else "—")
+    a3.metric("Reviewers",        len(summary.get("reviewers",[])))
+
+    rows = audit.load()
+    if rows:
+        import pandas as pd
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇ change_audit.csv", data=open(audit_path,"rb").read() if os.path.exists(audit_path) else b"",
+            file_name="change_audit.csv", mime="text/csv", use_container_width=True,
+        )
+    else:
+        st.caption("No changes logged yet — apply a config patch to start the audit trail.")
 
 
 if __name__ == "__main__":
