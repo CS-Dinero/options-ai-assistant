@@ -677,8 +677,8 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, governance_tab, system_tab = st.tabs([
-        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System"
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, governance_tab, system_tab, live_tab = st.tabs([
+        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data"
     ])
 
     with pos_tab:
@@ -704,6 +704,9 @@ def main():
 
     with system_tab:
         _render_system_panel()
+
+    with live_tab:
+        _render_live_data_panel()
 
 
 # ─────────────────────────────────────────────
@@ -1898,6 +1901,204 @@ def _render_system_panel() -> None:
             st.json(detail, expanded=False)
     else:
         st.caption("No releases yet — build a deployment packet or run the portfolio engine to create a release entry.")
+
+
+# ─────────────────────────────────────────────
+# LIVE DATA PANEL
+# ─────────────────────────────────────────────
+
+def _render_live_data_panel() -> None:
+    """
+    📡 Live Data tab — run the engine against real market data.
+
+    Provider options:
+      massive  — Polygon.io (Options Starter plan, key in MASSIVE_API_KEY)
+      csv      — exported CSV files in data/reports/, data/chains/, data/positions/
+      mock     — deterministic test data (always works, no API key needed)
+
+    Broker position tracking (Tradier) connects here once approved.
+    """
+    import os
+    from providers.provider_factory import build_provider
+    from providers.runtime_data_service import RuntimeDataService
+
+    st.markdown("### 📡 Live Data Runtime")
+    st.caption("Select a provider, enter symbols, and run the full portfolio engine against real data.")
+
+    # ── Provider selector ─────────────────────────────────────────────────────
+    provider_options = ["mock", "massive", "csv"]
+    provider_labels  = {
+        "mock":    "🧪 Mock — deterministic test data (no API key)",
+        "massive": "📈 Massive/Polygon — live options data (MASSIVE_API_KEY required)",
+        "csv":     "📂 CSV — exported broker/chain files",
+    }
+    provider_type = st.radio(
+        "Data Provider",
+        options=provider_options,
+        format_func=lambda p: provider_labels[p],
+        horizontal=True,
+        key="live_provider",
+    )
+
+    # ── Provider-specific config ──────────────────────────────────────────────
+    provider_kwargs: dict = {}
+    if provider_type == "massive":
+        api_key = st.text_input(
+            "MASSIVE_API_KEY",
+            value=os.getenv("MASSIVE_API_KEY", ""),
+            type="password",
+            help="Set via environment variable or enter here. Never committed to git.",
+            key="live_api_key",
+        )
+        if api_key:
+            provider_kwargs["api_key"] = api_key
+
+    elif provider_type == "csv":
+        st.caption("Expected file layout: `data/reports/{SYM}_report.csv`, `data/chains/{SYM}_chain.csv`")
+        provider_kwargs["reports_dir"]   = st.text_input("Reports dir",   "data/reports",  key="live_rdir")
+        provider_kwargs["chains_dir"]    = st.text_input("Chains dir",    "data/chains",   key="live_cdir")
+        provider_kwargs["positions_path"]= st.text_input("Positions file","data/positions/open_positions.csv", key="live_ppath")
+
+    # ── Symbols + run options ─────────────────────────────────────────────────
+    symbols_raw = st.text_input("Symbols (comma-separated)", value="SPY", key="live_symbols")
+    symbols     = [s.strip().upper() for s in symbols_raw.split(",") if s.strip()]
+
+    col1, col2, col3 = st.columns(3)
+    log_events   = col1.checkbox("Log backtest events", key="live_log_ev")
+    log_journal  = col2.checkbox("Log execution journal", key="live_log_ej")
+    persist_st   = col3.checkbox("Persist state + snapshots", key="live_persist")
+
+    # ── Status indicator ──────────────────────────────────────────────────────
+    if provider_type == "massive":
+        key_present = bool(provider_kwargs.get("api_key") or os.getenv("MASSIVE_API_KEY",""))
+        if key_present:
+            st.success("✅ MASSIVE_API_KEY detected — ready for live data")
+        else:
+            st.warning("⚠️ No MASSIVE_API_KEY — set it in Streamlit secrets or above")
+    elif provider_type == "csv":
+        rdir = provider_kwargs.get("reports_dir","data/reports")
+        if os.path.isdir(rdir):
+            csvs = [f for f in os.listdir(rdir) if f.endswith("_report.csv")]
+            st.success(f"✅ Found {len(csvs)} report file(s) in {rdir}")
+        else:
+            st.warning(f"⚠️ Reports dir not found: {rdir} — create it with sample files to test")
+
+    # ── Run button ────────────────────────────────────────────────────────────
+    if not st.button("▶ Run Live Engine", type="primary", key="live_run"):
+        # Show provider capability table when idle
+        st.divider()
+        st.markdown("**Provider capability comparison:**")
+        cap_data = {
+            "Capability": ["Spot price","Option chain","Greeks (Δ,Γ,θ,V)","IV / skew","ATR (live)","GEX (from chain OI)","IV percentile","Open positions","Fill prices"],
+            "Mock":        ["✅","✅","✅","✅","✅","✅","✅","✅","—"],
+            "Massive/Polygon":["✅","✅","✅","✅","✅ (v2/aggs)","✅","⚠️ est","—","—"],
+            "CSV":         ["✅","✅","if provided","if provided","if provided","from OI","if provided","✅ file","—"],
+            "Tradier (pending)":["✅","✅","✅","✅","—","from OI","—","✅ live","✅"],
+        }
+        import pandas as pd
+        st.dataframe(pd.DataFrame(cap_data), use_container_width=True, hide_index=True)
+        st.caption("⚠️ = approximate/estimated  |  — = not available from this source")
+        return
+
+    # ── Execute ───────────────────────────────────────────────────────────────
+    try:
+        provider = build_provider(provider_type, **provider_kwargs)
+    except Exception as e:
+        st.error(f"Failed to initialize provider: {e}")
+        return
+
+    svc = RuntimeDataService(provider)
+    st.caption(f"Provider: `{svc.provider_name}` | Symbols: {symbols}")
+
+    with st.spinner(f"Running engine via {svc.provider_name}..."):
+        try:
+            output = svc.run_portfolio(
+                symbols,
+                config_path="config/config.yaml",
+                log_backtest_events=log_events,
+                log_execution_journal=log_journal,
+                persist_state=persist_st,
+                snapshot_history=persist_st,
+            )
+        except Exception as e:
+            st.error(f"Engine error: {e}")
+            st.exception(e)
+            return
+
+    meta  = output["portfolio_meta"]
+    alloc = output["allocation"]
+
+    # Summary metrics
+    m1,m2,m3,m4,m5,m6 = st.columns(6)
+    m1.metric("Symbols",  meta["symbols_processed"])
+    m2.metric("Ranked",   meta["total_ranked_trades"])
+    m3.metric("Selected", meta["selected_trades"])
+    m4.metric("Rejected", meta["rejected_trades"])
+    m5.metric("Budget",   f"${alloc['total_risk_budget']:,.0f}")
+    m6.metric("Used",     f"${alloc['used_risk_budget']:,.0f}")
+
+    # Per-symbol results
+    for sym_block in output["symbols"]:
+        eng = sym_block["engine_output"]
+        sym = sym_block["symbol"]
+        vga = eng.get("vga","unknown")
+        n   = len(eng.get("candidates",[]))
+
+        VGA_COLORS = {"premium_selling":"#22c55e","neutral_time_spreads":"#3b82f6",
+                      "cautious_directional":"#f59e0b","trend_directional":"#ef4444","mixed":"#6b7280"}
+        col = VGA_COLORS.get(vga,"#6b7280")
+
+        st.markdown(
+            f'<div style="background:#0f1117;border:1px solid {col}44;border-radius:10px;'
+            f'padding:12px;margin-bottom:8px">'
+            f'<div style="display:flex;justify-content:space-between">'
+            f'<div><span style="font-size:16px;font-weight:700;color:#f9fafb">{sym}</span>'
+            f'<span style="margin-left:12px;font-size:11px;color:#9ca3af">via {svc.provider_name}</span></div>'
+            f'<span style="background:{col};color:#fff;padding:3px 12px;border-radius:20px;'
+            f'font-size:11px;font-weight:700">{vga.replace("_"," ").upper()}</span></div>'
+            f'<div style="font-size:12px;color:#9ca3af;margin-top:6px">'
+            f'spot ${eng["market"].get("spot_price",0):.2f} | '
+            f'EM ±${eng["derived"].get("expected_move",0):.2f} | '
+            f'candidates: {n}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+        for c in eng.get("candidates",[])[:3]:
+            st_type = c.get("strategy_type","").replace("_"," ").title()
+            score   = c.get("confidence_score",0)
+            dec     = c.get("decision","")
+            dec_col = {"STRONG":"#22c55e","TRADABLE":"#3b82f6","SKIP":"#6b7280"}.get(dec,"#6b7280")
+            st.markdown(
+                f'&nbsp;&nbsp;&nbsp;'
+                f'<span style="color:{dec_col};font-weight:700">●</span> '
+                f'`{st_type}` score={score:.0f} '
+                f'<span style="color:{dec_col};font-size:11px">{dec}</span>',
+                unsafe_allow_html=True,
+            )
+
+    # Alerts
+    high_alerts = [a for a in output.get("alerts",[]) if a.get("severity") in ("HIGH","CRITICAL")]
+    if high_alerts:
+        st.divider()
+        st.markdown("#### 🔴 High Priority Alerts")
+        for a in high_alerts[:5]:
+            st.error(f"**{a['title']}** — {a['message']}")
+
+    # Selected trades
+    selected = alloc.get("selected_trades",[])
+    if selected:
+        st.divider()
+        st.markdown("#### ✅ Selected Trades")
+        for t in selected:
+            st.markdown(
+                f"**{t.get('symbol','')} {str(t.get('strategy_type',t.get('strategy',''))).replace('_',' ').title()}** "
+                f"score={t.get('confidence_score',t.get('score',0)):.0f} | "
+                f"risk=${t.get('_risk',0):.0f} | "
+                f"contracts={t.get('contracts',1)}"
+            )
+
+    with st.expander(f"Raw output — {meta['run_id'][:30]}"):
+        st.json(meta)
 
 
 if __name__ == "__main__":

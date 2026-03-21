@@ -211,6 +211,10 @@ class TradierProvider(MarketDataProvider):
             "put_25d_iv":         put_25d,
             "call_25d_iv":        call_25d,
             "preferred_risk_dollars": 500,
+            # Strategy config defaults
+            "default_spread_width": 5,
+            "front_dte":            market_short_dte,
+            "event_flag":           False,
         }
 
     def _empty_market(self, symbol: str, spot: float) -> dict:
@@ -252,48 +256,3 @@ class TradierProvider(MarketDataProvider):
                     "option_type": opt_type, "strike": strike, "dte": dte}
         except Exception:
             return None
-
-cat > /home/claude/options_assistant/providers/provider_factory.py << 'PYEOF'
-"""
-providers/provider_factory.py
-Builds the correct provider from a string key.
-Used by dashboard and runners to select data source without imports.
-"""
-
-from __future__ import annotations
-from providers.data_provider_interface import MarketDataProvider
-
-
-def build_provider(provider_type: str, **kwargs) -> MarketDataProvider:
-    ptype = provider_type.strip().lower()
-
-    if ptype == "mock":
-        from providers.mock_provider import MockProvider
-        return MockProvider()
-
-    if ptype == "massive":
-        from providers.massive_provider import MassiveProvider
-        return MassiveProvider(
-            api_key=kwargs.get("api_key", ""),
-            symbol=kwargs.get("symbol", "SPY"),
-        )
-
-    if ptype == "csv":
-        from providers.csv_provider import CSVProvider
-        return CSVProvider(
-            reports_dir=kwargs.get("reports_dir", "data/reports"),
-            chains_dir=kwargs.get("chains_dir", "data/chains"),
-            positions_path=kwargs.get("positions_path", "data/positions/open_positions.csv"),
-        )
-
-    if ptype == "tradier":
-        from providers.tradier_provider import TradierProvider, TradierConfig
-        cfg = TradierConfig(
-            access_token=kwargs.get("access_token", ""),
-            account_id=kwargs.get("account_id", ""),
-            use_sandbox=kwargs.get("use_sandbox", True),
-        )
-        return TradierProvider(cfg)
-
-    raise ValueError(f"Unknown provider type: '{provider_type}'. "
-                     f"Valid: mock, massive, csv, tradier")

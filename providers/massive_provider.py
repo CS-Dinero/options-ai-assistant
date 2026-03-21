@@ -41,6 +41,9 @@ class MassiveProvider(MarketDataProvider):
             spot      = get_spot_price(sym)
             chain     = get_option_chain(sym, short_exp)
 
+            from data_sources.massive_api import get_atr_14
+            atr_14, atr_prior = get_atr_14(sym)
+
             atm_call_mid, atm_put_mid = extract_atm_straddle(chain, spot)
             front_iv, back_iv         = extract_front_iv(chain)
             put_25d_iv, call_25d_iv   = extract_skew_25d(chain)
@@ -57,8 +60,12 @@ class MassiveProvider(MarketDataProvider):
                 "put_25d_iv":        put_25d_iv,
                 "call_25d_iv":       call_25d_iv,
                 "iv_percentile":     50.0,   # not available from Massive directly
-                "atr_14":            3.0,    # placeholder — add history endpoint later
-                "atr_prior":         3.0,
+                "atr_14":            atr_14,
+                "atr_prior":         atr_prior,
+                # Strategy config defaults
+                "default_spread_width": 5,
+                "front_dte":            _compute_dte(short_exp),
+                "event_flag":           False,
                 "preferred_risk_dollars": 500,
             }
         except Exception as e:

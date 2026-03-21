@@ -1,0 +1,3 @@
+symbol,expiration,option_type,strike,quantity,dte,avg_price,mark,side,strategy_type
+SPY,2026-04-01,put,500,-1,10,0.59,0.45,short,bull_put
+SPY,2026-04-01,put,495,1,10,0.29,0.20,long,bull_put

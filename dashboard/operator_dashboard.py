@@ -577,6 +577,71 @@ def _render_parameter_tuner() -> None:
 # MAIN ENTRY
 # ─────────────────────────────────────────────
 
+
+def _render_live_data() -> None:
+    """📡 Live Data — run engine against real provider data."""
+    import os
+    from providers.provider_factory import build_provider
+    from providers.runtime_data_service import RuntimeDataService
+
+    st.title("📡 Live Data Runtime")
+
+    provider_type = st.radio(
+        "Provider",
+        ["mock","massive","csv"],
+        format_func=lambda p: {"mock":"🧪 Mock","massive":"📈 Massive/Polygon","csv":"📂 CSV files"}[p],
+        horizontal=True,
+        key="op_live_provider",
+    )
+    kwargs: dict = {}
+    if provider_type == "massive":
+        key = st.text_input("MASSIVE_API_KEY", os.getenv("MASSIVE_API_KEY",""), type="password", key="op_live_key")
+        if key: kwargs["api_key"] = key
+    elif provider_type == "csv":
+        kwargs["reports_dir"]    = st.text_input("Reports dir", "data/reports", key="op_live_rdir")
+        kwargs["chains_dir"]     = st.text_input("Chains dir",  "data/chains",  key="op_live_cdir")
+        kwargs["positions_path"] = st.text_input("Positions",   "data/positions/open_positions.csv", key="op_live_pos")
+
+    symbols_raw = st.text_input("Symbols", "SPY", key="op_live_sym")
+    symbols     = [s.strip().upper() for s in symbols_raw.split(",") if s.strip()]
+    col1, col2  = st.columns(2)
+    log_ev      = col1.checkbox("Log events",  key="op_live_lev")
+    persist     = col2.checkbox("Persist state", key="op_live_ps")
+
+    if not st.button("▶ Run", type="primary", key="op_live_run"):
+        return
+
+    try:
+        svc = RuntimeDataService(build_provider(provider_type, **kwargs))
+    except Exception as e:
+        st.error(f"Provider init failed: {e}"); return
+
+    with st.spinner(f"Running via {svc.provider_name}..."):
+        try:
+            out = svc.run_portfolio(symbols, log_backtest_events=log_ev,
+                                    persist_state=persist, snapshot_history=persist)
+        except Exception as e:
+            st.error(f"Engine error: {e}"); st.exception(e); return
+
+    meta  = out["portfolio_meta"]
+    alloc = out["allocation"]
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Symbols",  meta["symbols_processed"])
+    c2.metric("Ranked",   meta["total_ranked_trades"])
+    c3.metric("Selected", meta["selected_trades"])
+    c4.metric("Used Risk", f"${alloc['used_risk_budget']:,.0f}")
+    for b in out["symbols"]:
+        eng = b["engine_output"]
+        st.markdown(f"**{b['symbol']}** `{eng.get('vga','?')}` "
+                    f"spot=${eng['market'].get('spot_price',0):.2f} "
+                    f"EM±${eng['derived'].get('expected_move',0):.2f} "
+                    f"candidates={len(eng.get('candidates',[]))}")
+        for c in eng.get("candidates",[])[:3]:
+            st.caption(f"  • {c.get('strategy_type','?')} score={c.get('confidence_score',0):.0f} {c.get('decision','?')}")
+    with st.expander("Raw output"):
+        st.json(meta)
+
+
 PAGES = {
     "🏠 Home":               _render_home,
     "🚀 Bootstrap":          _render_bootstrap,
@@ -593,6 +658,7 @@ PAGES = {
     "📈 Analytics":          _render_analytics,
     "🧠 Optimizer":          _render_optimizer,
     "🎛 Parameter Tuner":    _render_parameter_tuner,
+    "📡 Live Data":          _render_live_data,
 }
 
 

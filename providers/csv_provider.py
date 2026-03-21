@@ -46,18 +46,31 @@ class CSVProvider(MarketDataProvider):
             row = next(csv.DictReader(f), {})
         sf = self._safe_float
         return {
-            "symbol":           symbol.upper(),
-            "spot_price":       sf(row.get("spot")) or 0.0,
-            "short_dte_target": int(float(row.get("short_dte_target", 7))),
-            "long_dte_target":  int(float(row.get("long_dte_target", 60))),
-            "front_iv":         sf(row.get("front_iv")),
-            "back_iv":          sf(row.get("back_iv")),
-            "iv_percentile":    sf(row.get("iv_percentile")),
-            "atr_14":           sf(row.get("atr_14")),
-            "atr_prior":        sf(row.get("atr_prior")),
-            "put_25d_iv":       sf(row.get("put_25d_iv")),
-            "call_25d_iv":      sf(row.get("call_25d_iv")),
+            "symbol":              symbol.upper(),
+            "spot_price":          sf(row.get("spot")) or 0.0,
+            "short_dte_target":    int(float(row.get("short_dte_target", 7))),
+            "long_dte_target":     int(float(row.get("long_dte_target", 60))),
+            "front_iv":            sf(row.get("front_iv")),
+            "back_iv":             sf(row.get("back_iv")),
+            "iv_percentile":       sf(row.get("iv_percentile")),
+            "atr_14":              sf(row.get("atr_14")),
+            "atr_prior":           sf(row.get("atr_prior")),
+            "put_25d_iv":          sf(row.get("put_25d_iv")),
+            "call_25d_iv":         sf(row.get("call_25d_iv")),
+            # GEX / gamma fields
+            "total_gex":           sf(row.get("total_gex")),
+            "gamma_flip":          sf(row.get("gamma_flip")),
+            "gamma_trap_strike":   sf(row.get("gamma_trap_strike")),
+            # ATM straddle for expected move
+            "atm_call_mid":        sf(row.get("atm_call_mid")),
+            "atm_put_mid":         sf(row.get("atm_put_mid")),
             "preferred_risk_dollars": 500,
+            # Strategy config defaults (can be overridden in report CSV if needed)
+            "default_spread_width": int(float(row.get("default_spread_width", 5))),
+            "front_dte":            int(float(row.get("front_dte", row.get("short_dte_target", 7)))),
+            "event_flag":           row.get("event_flag", "false").lower() == "true"
+                                    if isinstance(row.get("event_flag"), str)
+                                    else bool(row.get("event_flag", False)),
         }
 
     def get_chain(self, symbol: str) -> list[dict[str, Any]]:
