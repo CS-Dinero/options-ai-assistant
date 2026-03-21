@@ -200,11 +200,25 @@ def build_optimizer_report(
         "recurring_roll_patterns":   roll_df.head(10).to_dict(orient="records") if not roll_df.empty else [],
     }
 
+    # Parameter tuner — graceful fallback if logs are empty
+    try:
+        from engines.parameter_tuner import tune_parameters
+        tuning = tune_parameters(
+            config_path=str(Path(__file__).parent.parent / "config" / "config.yaml"),
+            backtest_events_path=backtest_events_path,
+            execution_journal_path=execution_journal_path,
+            roll_log_path=roll_log_path,
+        )
+        tuning_dict = tuning.to_dict()
+    except Exception:
+        tuning_dict = {"summary": {}, "suggestions": []}
+
     return {
-        "summary":           summary,
-        "strategy_outcomes": strat_df,
-        "rejection_reasons": reject_df,
-        "roll_actions":      roll_df,
-        "symbol_allocation": alloc_df,
-        "snapshot_changes":  snap_df,
+        "summary":            summary,
+        "strategy_outcomes":  strat_df,
+        "rejection_reasons":  reject_df,
+        "roll_actions":       roll_df,
+        "symbol_allocation":  alloc_df,
+        "snapshot_changes":   snap_df,
+        "parameter_tuning":   tuning_dict,
     }

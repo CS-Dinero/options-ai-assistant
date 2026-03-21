@@ -1471,6 +1471,9 @@ def _render_optimizer_panel() -> None:
             else:
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
+    # ── Parameter Tuner + Patcher inline ────────────────────────────────────
+    _render_tuner_patcher_inline(bt_path, ex_path, roll_path)
+
     # ── Session compare ───────────────────────────────────────────────────────
     st.divider()
     st.markdown("### 🔍 Session Compare")
@@ -1536,6 +1539,110 @@ def _render_optimizer_panel() -> None:
 
     except Exception as e:
         st.caption(f"Session compare unavailable: {e}")
+
+
+# ─────────────────────────────────────────────
+# TUNER + PATCHER PANEL (appended to Optimizer tab)
+# ─────────────────────────────────────────────
+
+def _render_tuner_patcher_inline(bt_path: str, ex_path: str, roll_path: str) -> None:
+    """
+    Inline parameter tuner + config patcher sections.
+    Called from _render_optimizer_panel() after the optimizer tables.
+    """
+    st.divider()
+    st.markdown("### 🎛 Parameter Tuner")
+    st.caption("Suggestions based on log behavior. Review before applying.")
+
+    from engines.parameter_tuner import tune_parameters
+
+    try:
+        tuning = tune_parameters(
+            backtest_events_path=bt_path,
+            execution_journal_path=ex_path,
+            roll_log_path=roll_path,
+        )
+        payload = tuning.to_dict()
+    except Exception as e:
+        st.caption(f"Tuner unavailable: {e}")
+        return
+
+    summary = payload.get("summary", {})
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Sel/Rej Ratio",     summary.get("selected_rejected_ratio", "—"))
+    s2.metric("Top Rejection",     summary.get("top_rejection_reason", "—") or "—")
+    s3.metric("Top Roll Action",   summary.get("top_roll_action", "—") or "—")
+
+    suggestions = payload.get("suggestions", [])
+    if not suggestions:
+        st.caption("No parameter suggestions yet — run more engine cycles with logging enabled.")
+        return
+
+    for s in suggestions:
+        conf = float(s.get("confidence", 0))
+        col  = "#22c55e" if conf >= 0.70 else ("#f59e0b" if conf >= 0.55 else "#6b7280")
+        st.markdown(
+            f'<div style="background:#0f1117;border:1px solid {col}33;border-radius:10px;padding:12px;margin-bottom:8px">'
+            f'<div style="display:flex;justify-content:space-between">'
+            f'<div><span style="font-size:11px;color:#9ca3af">{s["parameter"]}</span><br>'
+            f'<span style="font-size:16px;font-weight:700;color:{col}">{s["direction"].upper()}</span></div>'
+            f'<div style="text-align:right"><span style="font-size:11px;color:#9ca3af">Confidence</span><br>'
+            f'<span style="font-size:16px;font-weight:700;color:{col}">{conf:.0%}</span></div></div>'
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">'
+            f'<div><span style="font-size:10px;color:#6b7280">Current</span><br>'
+            f'<span style="color:#e5e7eb">{s["current_value"]}</span></div>'
+            f'<div><span style="font-size:10px;color:#6b7280">Suggested</span><br>'
+            f'<span style="color:#e5e7eb">{s["suggested_value"]}</span></div></div>'
+            f'<div style="margin-top:6px;font-size:11px;color:#9ca3af">{s.get("rationale","")}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
+    st.markdown("### 🛠 Config Patcher")
+    st.caption("Apply approved tuner suggestions to `config.yaml`. Always creates a backup.")
+
+    option_labels = [
+        f'{s["parameter"]} → {s["suggested_value"]} ({int(float(s.get("confidence",0))*100)}%)'
+        for s in suggestions
+    ]
+    selected = st.multiselect("Parameters to patch", option_labels, default=option_labels,
+                               key="patcher_params")
+    selected_params = [s["parameter"] for s, lbl in zip(suggestions, option_labels) if lbl in selected]
+    min_conf = st.slider("Min confidence", 0.0, 1.0, 0.65, 0.05, key="patcher_conf")
+
+    from engines.config_patcher import preview_config_patch, apply_config_patch
+
+    import os
+    cfg_path    = "config/config.yaml"
+    backup_dir  = "/tmp/options_ai_config_backups" if os.path.exists("/mount/src") else "config_backups"
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("👁 Preview", key="patcher_preview"):
+            result = preview_config_patch(
+                config_path=cfg_path,
+                tuning_payload=payload,
+                include_parameters=selected_params,
+                min_confidence=min_conf,
+            )
+            st.json(result.to_dict(), expanded=False)
+
+    with col2:
+        if st.button("✅ Apply Patch", type="primary", key="patcher_apply"):
+            result = apply_config_patch(
+                config_path=cfg_path,
+                tuning_payload=payload,
+                include_parameters=selected_params,
+                min_confidence=min_conf,
+                make_backup=True,
+                backup_dir=backup_dir,
+            )
+            if result.applied:
+                st.success(f"Config updated. {result.notes}")
+            else:
+                st.info(f"No changes applied. {result.notes}")
+            st.json(result.to_dict(), expanded=False)
 
 
 if __name__ == "__main__":
