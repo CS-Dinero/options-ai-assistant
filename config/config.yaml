@@ -1,0 +1,93 @@
+# config/config.yaml
+# EGPE v1.0 — EM-Gamma Premium Engine configuration
+# Governs: strategy selection thresholds, risk sizing, management rules
+# DO NOT edit in production without going through approval workflow.
+
+app:
+  name: "Options AI Assistant"
+  strategy_engine: "EM-Gamma Premium Engine v1.0"
+  symbols:
+    - SPY
+    - QQQ
+
+# ── Strategy selection filters ────────────────────────────────────────────────
+filters:
+  credit_score_threshold:   75    # minimum score to show credit spreads
+  calendar_score_threshold: 72    # minimum score to show calendars
+  diagonal_score_threshold: 65    # minimum score to show diagonals
+  double_diagonal_threshold: 68   # minimum score to show double diagonals
+  min_credit:               0.20  # minimum credit per spread
+  min_debit:                0.10  # minimum debit per calendar
+
+# ── Credit spread rules (EGPE v1.0) ──────────────────────────────────────────
+credit_spreads:
+  short_delta_min:            0.15   # tightened per EGPE spec (was 0.10)
+  short_delta_max:            0.20
+  width_min:                  3
+  width_max:                  10
+  take_profit_pct_of_credit:  0.50   # close at 50% profit
+  stop_multiple_of_credit:    2.0    # close at 2x credit received
+  exit_dte:                   5      # time-based exit at 5 DTE remaining
+
+# ── Calendar rules ────────────────────────────────────────────────────────────
+calendar:
+  short_dte_min:    7
+  short_dte_max:    10
+  long_dte_min:     45
+  long_dte_max:     60
+  long_exit_dte:    35              # exit when long leg reaches this DTE
+  iv_crush_threshold: -0.15        # close calendar on IV crush > 15%
+
+# ── Diagonal rules ────────────────────────────────────────────────────────────
+diagonal:
+  long_delta_min:   0.70
+  long_delta_max:   0.85
+  short_delta_min:  0.20
+  short_delta_max:  0.35
+  max_debit_pct_of_width: 0.95    # LEAPS-aware debit cap
+  max_long_extrinsic_ratio: 0.40
+
+# ── Calendar → Diagonal lifecycle (EGPE) ──────────────────────────────────────
+calendar_diagonal:
+  short_dte_min:         7
+  short_dte_max:         10
+  long_dte_min:          45
+  long_dte_max:          60
+  long_exit_dte_high:    35        # exit window start
+  long_exit_dte_low:     28        # exit window end
+  convert_em_frac_low:   0.35      # convert to diagonal above this drift
+  convert_em_frac_high:  1.00      # structure break above this drift
+  short_roll_dte:        5
+  diagonal_roll_dte:     5
+  target_profit_pct:     0.20
+  stop_loss_pct:         0.25
+
+# ── Risk management ───────────────────────────────────────────────────────────
+risk:
+  account_size:             200000
+  max_risk_per_side_pct:    0.005   # 0.5% per side = $1,000 on $200K
+  max_total_symbol_pct:     0.02    # max 2% total per symbol
+  preferred_risk_dollars:   500     # default risk per trade
+
+# ── Regime entry gates ────────────────────────────────────────────────────────
+environment:
+  credit_spreads:
+    required_gamma_regimes:    [positive]
+    required_iv_regimes:       [elevated, rich]
+    required_em_atr_ratio_min: 2.5
+  calendars:
+    required_gamma_regimes:    [positive]
+    required_iv_regimes:       [elevated, moderate]
+    required_term_structures:  [flat, contango]
+  diagonals:
+    required_vga_environments: [neutral_time_spreads, premium_selling, mixed]
+
+# ── Scoring weights ───────────────────────────────────────────────────────────
+# Must sum to 100. Maps to config/settings.py SCORE_WEIGHTS.
+scoring:
+  iv_regime:     20
+  gamma_regime:  20
+  em_placement:  20
+  skew:          15
+  term_structure: 15
+  atr_regime:    10
