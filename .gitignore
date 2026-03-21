@@ -36,3 +36,4 @@ config_backups/
 deployment_packets/
 snapshots/
 state/
+options_assistant/

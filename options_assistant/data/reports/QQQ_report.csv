@@ -1,2 +1,0 @@
-symbol,spot,short_dte_target,long_dte_target,front_iv,back_iv,iv_percentile,atr_14,atr_prior,put_25d_iv,call_25d_iv,total_gex,gamma_flip,gamma_trap_strike,atm_call_mid,atm_put_mid
-QQQ,448.30,10,55,0.20,0.215,55,4.2,4.5,0.235,0.175,680000000,432,462,7.80,7.50
