@@ -10,10 +10,13 @@ DEFAULT_SHORT_DTE    = 7
 DEFAULT_LONG_DTE     = 60
 
 # Credit spread rules
-CREDIT_DELTA_MIN         = 0.10
+CREDIT_DELTA_MIN         = 0.15  # EGPE v1.0: tightened from 0.10
 CREDIT_DELTA_MAX         = 0.20
 CREDIT_TARGET_PERCENT    = 0.50
 CREDIT_STOP_MULTIPLIER   = 2.0
+
+# Time-based exit (EGPE v1.0 rule: close at 3-5 DTE remaining)
+TIME_EXIT_DTE            = 5
 
 # Debit spread rules
 DEBIT_TARGET_CAPTURE     = 0.50

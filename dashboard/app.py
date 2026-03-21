@@ -15,11 +15,12 @@ DATA_MODE is controlled by the sidebar dropdown.
 import sys
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 
 # ── Path setup — works locally and on Streamlit Cloud ────────────────────────
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+
+from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
 import streamlit as st
@@ -53,6 +54,7 @@ from strategies.diagonal        import generate_diagonal_candidates
 from calculator.trade_scoring   import rank_candidates, get_score_breakdown
 from config.settings            import SCORE_STRONG, SCORE_TRADABLE
 from backtest.trade_logger      import TradeLogger
+from position_manager.position_tracker import PositionTracker
 from dashboard.components.strategy_bars import render_strategy_probability_bars
 from dashboard.components.em_cone       import render_em_cone
 from dashboard.components.gamma_wall    import render_gamma_wall
@@ -673,14 +675,16 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    tlog_tab, bt_tab = st.tabs(["📋 Trade Log & Export", "🔬 Backtest"])
+    pos_tab, tlog_tab, bt_tab = st.tabs(["📍 Positions", "📋 Trade Log & Export", "🔬 Backtest"])
+
+    with pos_tab:
+        _render_positions_panel(derived, market)
 
     with tlog_tab:
         _render_trade_log_panel(candidates, market, derived)
 
     with bt_tab:
         _render_backtest_panel()
-
 
 
 # ─────────────────────────────────────────────
@@ -691,7 +695,15 @@ def _render_trade_log_panel(ranked: list[dict], market: dict, derived: dict):
     """
     Trade Log tab — visible, always expanded, three sub-tabs.
     """
-    logger = TradeLogger()
+    import os
+    from pathlib import Path
+    # Streamlit Cloud is read-only except /tmp — use /tmp for logs there
+    if os.path.exists("/mount/src"):
+        log_dir = Path("/tmp/options_ai_logs")
+    else:
+        log_dir = Path(__file__).parent.parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logger = TradeLogger(log_dir=log_dir)
 
     log_tab, positions_tab, stats_tab = st.tabs(
         ["📤 Log Scan", "📂 Open Positions", "📊 Performance Stats"]
@@ -869,10 +881,9 @@ def _render_backtest_panel():
             )
         except FileNotFoundError:
             st.info(f"No historical data found for **{symbol}** — generating mock data…")
+            from backtest.generate_mock_data import generate
+            generate(num_days=30, symbol=symbol)
             try:
-                from backtest.generate_mock_data import generate
-                generate(num_days=30, symbol=symbol)
-                st.success("Mock data generated. Re-running backtest…")
                 result = run_backtest(
                     symbols            = [symbol],
                     start              = start_date,
@@ -881,8 +892,8 @@ def _render_backtest_panel():
                     max_trades_per_day = int(max_per_day),
                     score_threshold    = int(score_thresh),
                 )
-            except Exception as e2:
-                st.error(f"Could not generate mock data or run backtest: {e2}")
+            except Exception as e:
+                st.error(f"Backtest error after generating data: {e}")
                 return
         except Exception as e:
             st.error(f"Backtest error: {e}")
@@ -1023,6 +1034,154 @@ def _render_backtest_panel():
                 mime="text/csv",
                 use_container_width=False,
             )
+
+
+# ─────────────────────────────────────────────
+# POSITIONS PANEL
+# ─────────────────────────────────────────────
+
+def _render_positions_panel(derived: dict, market: dict) -> None:
+    """
+    📍 Positions tab — tracks open trades, surfaces lifecycle signals.
+
+    Primary source: logs/trade_log.csv (rows where date_close is blank)
+    Fallback/override: data/positions/open_positions.csv
+    """
+    import os
+    from pathlib import Path
+
+    # Cloud-safe path resolution
+    if os.path.exists("/mount/src"):
+        log_path    = Path("/tmp/options_ai_logs/trade_log.csv")
+        manual_path = Path("/tmp/options_ai_logs/open_positions.csv")
+    else:
+        log_path    = Path("logs/trade_log.csv")
+        manual_path = Path("data/positions/open_positions.csv")
+
+    tracker  = PositionTracker(trade_log_path=log_path, manual_csv_path=manual_path)
+    spot     = market.get("spot_price", 0)
+    snapshot = tracker.snapshot(derived=derived, spot=spot)
+    summary  = snapshot["summary"]
+
+    # ── Summary bar ───────────────────────────────────────────────────────────
+    s1, s2, s3, s4, s5 = st.columns(5)
+    s1.metric("Open Positions", summary["total_positions"])
+    s2.metric("🔴 High Urgency",   summary["high_urgency"],
+              delta="Action required" if summary["high_urgency"] else None,
+              delta_color="inverse" if summary["high_urgency"] else "off")
+    s3.metric("🟡 Medium Urgency", summary["medium_urgency"])
+    s4.metric("⚠️ Close Signals",  summary["close_signals"])
+    s5.metric("VGA",               summary["vga_environment"].replace("_", " ").title())
+
+    if summary["total_positions"] == 0:
+        st.info(
+            "No open positions found.\n\n"
+            "Open positions are read automatically from `logs/trade_log.csv` "
+            "(rows where date_close is blank).\n\n"
+            "Use **📋 Trade Log → Open trade** to log a new position, "
+            "or add rows to `data/positions/open_positions.csv` for manual override."
+        )
+        return
+
+    st.divider()
+
+    # ── Calendar / Diagonal positions ─────────────────────────────────────────
+    cal_diag = snapshot["calendar_diagonal"]
+    if cal_diag:
+        st.markdown("### 📅 Calendars & Diagonals")
+        for pos in cal_diag:
+            decision = pos.get("decision", {})
+            action   = decision.get("action", "HOLD")
+            urgency  = decision.get("urgency", "LOW")
+
+            urgency_color = {"HIGH": "#ef4444", "MEDIUM": "#f59e0b", "LOW": "#22c55e"}.get(urgency, "#6b7280")
+            action_color  = {"EXIT_ENVIRONMENT": "#ef4444", "EXIT_LONG_WINDOW": "#ef4444",
+                             "EXIT_STRUCTURE_BREAK": "#ef4444", "CONVERT_TO_DIAGONAL": "#f97316",
+                             "ROLL_SHORT": "#f59e0b", "ROLL_DIAGONAL_SHORT": "#f59e0b",
+                             "HOLD": "#22c55e"}.get(action, "#6b7280")
+
+            with st.container(border=True):
+                h1, h2, h3, h4 = st.columns([3, 2, 2, 2])
+                st.markdown(
+                    f'<span style="background:{action_color}20;color:{action_color};'
+                    f'padding:3px 12px;border-radius:10px;font-size:13px;font-weight:700;'
+                    f'border:1px solid {action_color}40">{action.replace("_"," ")}</span>'
+                    f'&nbsp;&nbsp;<span style="color:{urgency_color};font-size:12px">'
+                    f'● {urgency}</span>',
+                    unsafe_allow_html=True,
+                )
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Symbol",     pos.get("symbol", ""))
+                m2.metric("Structure",  pos.get("strategy_type", "").replace("_", " ").title())
+                m3.metric("Long Strike", f"${decision.get('long_strike', pos.get('long_strike', ''))}")
+                m4.metric("Short Strike",f"${decision.get('short_strike', pos.get('short_strike', ''))}")
+                m5.metric("Long DTE",    f"{decision.get('long_dte', pos.get('long_dte', ''))}")
+
+                st.caption(f"📝 {decision.get('rationale', '')}")
+
+                if decision.get("target_short_strike"):
+                    st.caption(
+                        f"→ Target short strike: ${decision['target_short_strike']} | "
+                        f"Target short DTE: {decision.get('target_short_dte', '')} | "
+                        f"Notes: {decision.get('notes', '')}"
+                    )
+
+                with st.expander("Full decision details"):
+                    st.json(decision)
+
+    # ── Credit spreads ────────────────────────────────────────────────────────
+    credit_sp = snapshot["credit_spreads"]
+    if credit_sp:
+        st.divider()
+        st.markdown("### 💰 Credit Spreads")
+        for pos in credit_sp:
+            status = pos.get("management_status", "HOLD")
+            status_color = {"CLOSE_STOP": "#ef4444", "CLOSE_TIME": "#f59e0b",
+                            "CLOSE_TP": "#22c55e", "REVIEW_OR_ROLL": "#f97316",
+                            "HOLD": "#6b7280"}.get(status, "#6b7280")
+            with st.container(border=True):
+                st.markdown(
+                    f'<span style="background:{status_color}20;color:{status_color};'
+                    f'padding:3px 12px;border-radius:10px;font-size:13px;font-weight:700;'
+                    f'border:1px solid {status_color}40">{status.replace("_"," ")}</span>',
+                    unsafe_allow_html=True,
+                )
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Symbol",        pos.get("symbol", ""))
+                c2.metric("Strategy",      pos.get("strategy_type", "").replace("_"," ").title())
+                c3.metric("Short Strike",  f"${pos.get('short_strike','')}")
+                c4.metric("Expiration",    pos.get("short_expiration", ""))
+
+    # ── Debit spreads ─────────────────────────────────────────────────────────
+    debit_sp = snapshot["debit_spreads"]
+    if debit_sp:
+        st.divider()
+        st.markdown("### 📈 Debit Spreads")
+        for pos in debit_sp:
+            status = pos.get("management_status", "HOLD")
+            with st.container(border=True):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Symbol",     pos.get("symbol", ""))
+                c2.metric("Strategy",   pos.get("strategy_type", "").replace("_"," ").title())
+                c3.metric("Status",     status)
+                c4.metric("Expiration", pos.get("short_expiration", ""))
+
+    # ── Manual override instructions ──────────────────────────────────────────
+    with st.expander("ℹ️ How position tracking works"):
+        st.markdown("""
+**Primary source:** `logs/trade_log.csv` — any row where `date_close` is blank is treated as open.
+
+**Manual override:** `data/positions/open_positions.csv`
+- Rows with a matching `trade_id` **override** the log row
+- Rows without a `trade_id` are **appended** as supplemental positions
+
+**CSV column reference for manual positions:**
+```
+trade_id, symbol, strategy_type, direction,
+short_strike, long_strike, short_expiration, long_expiration,
+short_dte, long_dte, entry_price, spot_open
+```
+        """)
 
 
 if __name__ == "__main__":
