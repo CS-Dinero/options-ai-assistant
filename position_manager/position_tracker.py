@@ -268,14 +268,25 @@ class PositionTracker:
                     triggers  = evaluate_vh_triggers(row, mctx)
                     row["vh_triggers"] = triggers
                     harvest = build_harvest_summary(row, mctx, flip_rec)
+                    try:
+                        from engines.scaling_harvest_bot import build_bot_summary
+                        bot = build_bot_summary(row, mctx)
+                    except Exception:
+                        bot = {"bot_action":"HOLD","bot_priority":6,"urgency":"LOW",
+                               "rationale":"","recommended_contract_add":0}
                     row.update({
-                        "net_liq":              harvest["net_liq"],
-                        "harvestable_equity":   harvest["harvestable_equity"],
-                        "proposed_roll_credit": harvest["proposed_roll_credit"],
-                        "harvest_badge":        harvest["harvest_badge"],
-                        "gamma_trap_distance":  harvest["gamma_trap_distance"],
-                        "flip_recommendation":  flip_rec,
-                        "sentiment_score":      0.0,
+                        "net_liq":                  harvest["net_liq"],
+                        "harvestable_equity":       harvest["harvestable_equity"],
+                        "proposed_roll_credit":     harvest["proposed_roll_credit"],
+                        "harvest_badge":            harvest["harvest_badge"],
+                        "gamma_trap_distance":      harvest["gamma_trap_distance"],
+                        "flip_recommendation":      flip_rec,
+                        "sentiment_score":          0.0,
+                        "bot_action":               bot["bot_action"],
+                        "bot_priority":             bot["bot_priority"],
+                        "urgency":                  bot["urgency"],
+                        "bot_rationale":            bot["rationale"],
+                        "recommended_contract_add": bot["recommended_contract_add"],
                     })
                 except Exception:
                     pass
@@ -392,18 +403,32 @@ class PositionTracker:
                 flip_opt = {"flip_candidate": False, "recommendation": flip_rec,
                             "flip_quality_score": 0.0}
 
+            # Scaling bot — runs after harvest + flip are computed
+            try:
+                from engines.scaling_harvest_bot import build_bot_summary
+                bot = build_bot_summary(enriched, mctx)
+            except Exception:
+                bot = {"bot_action":"HOLD","bot_priority":6,"urgency":"LOW",
+                       "rationale":"Bot unavailable.","recommended_contract_add":0}
+
             enriched.update({
-                "net_liq":              harvest["net_liq"],
-                "harvestable_equity":   harvest["harvestable_equity"],
-                "proposed_roll_credit": harvest["proposed_roll_credit"],
-                "harvest_badge":        harvest["harvest_badge"],
-                "gamma_trap_distance":  harvest["gamma_trap_distance"],
-                "flip_recommendation":  flip_rec,
-                "flip_quality_score":   flip_opt.get("flip_quality_score", 0.0),
-                "flip_candidate":       flip_opt.get("flip_candidate", False),
-                "sentiment_score":      sentiment,
-                "harvest_summary":      harvest,
-                "flip_summary":         flip_opt,
+                "net_liq":                  harvest["net_liq"],
+                "harvestable_equity":       harvest["harvestable_equity"],
+                "proposed_roll_credit":     harvest["proposed_roll_credit"],
+                "harvest_badge":            harvest["harvest_badge"],
+                "gamma_trap_distance":      harvest["gamma_trap_distance"],
+                "flip_recommendation":      flip_rec,
+                "flip_quality_score":       flip_opt.get("flip_quality_score", 0.0),
+                "flip_candidate":           flip_opt.get("flip_candidate", False),
+                "sentiment_score":          sentiment,
+                "harvest_summary":          harvest,
+                "flip_summary":             flip_opt,
+                "bot_action":               bot["bot_action"],
+                "bot_priority":             bot["bot_priority"],
+                "urgency":                  bot["urgency"],
+                "bot_rationale":            bot["rationale"],
+                "recommended_contract_add": bot["recommended_contract_add"],
+                "bot_summary":              bot,
             })
         except Exception:
             pass
