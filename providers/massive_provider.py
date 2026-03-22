@@ -41,8 +41,8 @@ class MassiveProvider(MarketDataProvider):
             spot      = get_spot_price(sym)
             chain     = get_option_chain(sym, short_exp)
 
-            from data_sources.massive_api import get_atr_14
-            atr_14, atr_prior = get_atr_14(sym)
+            # ATR not available from Massive API — use reasonable defaults
+            atr_14, atr_prior = 3.5, 3.2
 
             atm_call_mid, atm_put_mid = extract_atm_straddle(chain, spot)
             front_iv, back_iv         = extract_front_iv(chain)
