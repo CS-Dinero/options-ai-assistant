@@ -11,7 +11,9 @@ def compute_term_slope(front_iv: float, back_iv: float) -> float:
     Positive = back month more expensive (contango, normal)
     Negative = front month more expensive (backwardation, stressed)
     """
-    return round(back_iv - front_iv, 2)
+    f = float(front_iv) if front_iv is not None else 0.16
+    b = float(back_iv)  if back_iv  is not None else 0.16
+    return round(b - f, 2)
 
 
 def classify_term_structure(term_slope: float) -> str:

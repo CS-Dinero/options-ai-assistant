@@ -55,6 +55,13 @@ class MassiveProvider(MarketDataProvider):
             atm_call_mid = straddle.get("atm_call_mid", 0.0)
             atm_put_mid  = straddle.get("atm_put_mid", 0.0)
 
+            # Guard against None IV values — engine arithmetic will crash without floats
+            _default_iv  = 0.16
+            front_iv     = float(front_iv)    if front_iv    is not None else _default_iv
+            back_iv      = float(back_iv)     if back_iv     is not None else _default_iv * 1.05
+            put_25d_iv   = float(put_25d_iv)  if put_25d_iv  is not None else _default_iv * 1.15
+            call_25d_iv  = float(call_25d_iv) if call_25d_iv is not None else _default_iv * 0.95
+
             # ATR: try live endpoint, fall back to IV-derived estimate
             try:
                 from data_sources.massive_api import get_atr_14
