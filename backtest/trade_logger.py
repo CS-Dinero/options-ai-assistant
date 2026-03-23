@@ -61,6 +61,9 @@ TRADE_LOG_FIELDS = [
     "short_vega", "long_vega", "score", "notes",
     # Extrinsic tracking (for diagonals/calendars)
     "short_entry_price", "short_intrinsic_entry", "short_extrinsic_entry",
+    # Live marks (updated via update_trade() — blank at open)
+    "current_value", "mark", "current_spread_value", "proposed_roll_credit",
+    "current_long_mid", "current_short_mid", "live_spot",
     # Close fields (blank at open)
     "date_close", "exit_price", "pnl", "exit_reason",
     "short_exit_price", "short_intrinsic_exit", "short_extrinsic_exit",
@@ -371,6 +374,18 @@ class TradeLogger:
             "theta_efficiency":      theta_efficiency,
         }
 
+        return _update_row(
+            self.trade_log_path, TRADE_LOG_FIELDS, "trade_id", trade_id, updates
+        )
+
+    # ── TRADE UPDATE (marks, current values) ─────────────────────────────────
+
+    def update_trade(self, trade_id: str, updates: dict) -> bool:
+        """
+        Update arbitrary fields on an open trade row.
+        Used to store current marks, spot, delta, spread value, roll credit.
+        Safe to call with any subset of TRADE_LOG_FIELDS or custom keys.
+        """
         return _update_row(
             self.trade_log_path, TRADE_LOG_FIELDS, "trade_id", trade_id, updates
         )

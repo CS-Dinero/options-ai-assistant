@@ -238,11 +238,19 @@ def render_sidebar() -> tuple[str, str]:
         st.title("⚙️ Settings")
         st.divider()
 
-        symbol = st.selectbox(
+        symbol = st.text_input(
             "Underlying",
-            ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "TSLA"],
-            index=0,
-        )
+            value=st.session_state.get("sidebar_symbol", "SPY"),
+            placeholder="e.g. TSLA, SPY, QQQ",
+            help="Type any ticker — supports all symbols available from your data source.",
+        ).upper().strip() or "SPY"
+        st.session_state["sidebar_symbol"] = symbol
+        # Quick-pick buttons
+        _qp_cols = st.columns(6)
+        for _i, _sym in enumerate(["SPY","QQQ","TSLA","AAPL","MSFT","IWM"]):
+            if _qp_cols[_i].button(_sym, key=f"qp_{_sym}", use_container_width=True):
+                st.session_state["sidebar_symbol"] = _sym
+                st.rerun()
 
         data_mode = st.selectbox(
             "Data Source",
@@ -827,6 +835,14 @@ def _render_trade_log_panel(ranked: list[dict], market: dict, derived: dict):
                         f"${t.get('short_strike', '')} / ${t.get('long_strike', t.get('hedge_strike', ''))}",
                     )
                     c2.metric("Entry", f"${t.get('entry_price', '')}")
+                    # P&L if current marks are stored
+                    _entry_v = abs(float(t.get("entry_price") or 0))
+                    _cur_v   = float(t.get("current_spread_value") or t.get("current_value") or 0)
+                    if _cur_v > 0 and _entry_v > 0:
+                        _contracts = max(1, int(float(t.get("contracts") or 1)))
+                        _pnl_est   = round((_cur_v - _entry_v) * 100 * _contracts, 2)
+                        c3.metric("Spread", f"${_cur_v:.2f}", delta=f"${_pnl_est:+.0f}",
+                                  delta_color="normal")
                     c3.metric("Target", f"${t.get('target_price', '')}")
                     c4.metric("Score", t.get("score", ""))
                     st.caption(
@@ -834,18 +850,8 @@ def _render_trade_log_panel(ranked: list[dict], market: dict, derived: dict):
                         f"Exp {t.get('short_expiration', '')} | "
                         f"ID: `{t['trade_id']}`"
                     )
-                    with st.expander("Close this trade"):
-                        ec1, ec2, ec3 = st.columns(3)
-                        exit_px = ec1.number_input("Exit price", value=0.0, step=0.01, key=f"ep_{t['trade_id']}")
-                        pnl_val = ec2.number_input("P&L ($)", value=0.0, step=1.0,    key=f"pnl_{t['trade_id']}")
-                        reason  = ec3.selectbox("Reason",
-                            ["target_hit", "stop_hit", "expiry", "manual_close", "rolled"],
-                            key=f"r_{t['trade_id']}")
-                        if st.button("Confirm close", key=f"close_{t['trade_id']}", type="primary"):
-                            ok = logger.close_trade(t["trade_id"], exit_px, pnl_val, reason)
-                            if ok:
-                                st.success(f"Trade {t['trade_id']} closed")
-                                st.rerun()
+                    with st.expander("✏️ Update marks / Close trade"):
+                        _render_close_trade_form(t, logger)
 
     # ── Stats ─────────────────────────────────────────────────────────────────
     with stats_tab:
@@ -2306,6 +2312,10 @@ def _render_harvest_row(pos: dict, market: dict, derived: dict) -> None:
             else:
                 st.warning(ticket_result["reason"])
 
+    # Update marks — inline expander under each position card
+    with st.expander(f"✏️ Update marks for {sym}", expanded=False):
+        _render_update_marks_form(pos)
+
 
 def _render_harvest_view(snapshot: dict, market: dict, derived: dict) -> None:
     """
@@ -2558,6 +2568,203 @@ def _render_trade_entry_form(logger) -> None:
     except Exception as e:
         st.error(f"Failed to log trade: {e}")
         st.exception(e)
+
+
+def _render_update_marks_form(pos: dict) -> None:
+    """
+    Inline form to update current mark prices for a logged position.
+    Allows harvest math to produce real numbers without a live API.
+
+    Reads current values from ThinkorSwim / Schwab Position tab:
+      Mark column = current mid price per leg
+    """
+    import os
+    from pathlib import Path
+    from backtest.trade_logger import TradeLogger
+
+    if os.path.exists("/mount/src"):
+        log_dir = Path("/tmp/options_ai_logs")
+    else:
+        log_dir = Path(__file__).parent.parent / "logs"
+
+    logger   = TradeLogger(log_dir=log_dir)
+    trade_id = pos.get("trade_id", "")
+    sym      = pos.get("symbol", "")
+
+    st.caption(
+        f"Enter current marks from your broker's Position tab. "
+        f"Trade ID: `{trade_id}`"
+    )
+
+    cur_long  = pos.get("current_long_mid")  or pos.get("current_value")
+    cur_short = pos.get("current_short_mid") or pos.get("mark")
+
+    col1, col2, col3, col4 = st.columns(4)
+    new_long  = col1.number_input(
+        "Long leg mark $",
+        min_value=0.0, value=float(cur_long or 0.0),
+        step=0.05, format="%.2f",
+        key=f"upd_long_{trade_id}",
+        help=f"Current mid price of the long leg from ThinkorSwim Mark column",
+    )
+    new_short = col2.number_input(
+        "Short leg mark $",
+        min_value=0.0, value=float(cur_short or 0.0),
+        step=0.05, format="%.2f",
+        key=f"upd_short_{trade_id}",
+        help=f"Current mid price of the short leg (use positive value)",
+    )
+    new_spot = col3.number_input(
+        "Current spot $",
+        min_value=0.0, value=float(pos.get("live_spot") or 0.0),
+        step=0.5, format="%.2f",
+        key=f"upd_spot_{trade_id}",
+        help=f"Current {sym} stock price",
+    )
+    new_delta = col4.number_input(
+        "Short delta",
+        min_value=0.0, max_value=1.0, value=float(abs(float(pos.get("short_delta") or 0))),
+        step=0.01, format="%.2f",
+        key=f"upd_delta_{trade_id}",
+        help="Abs value of short leg delta (from ThinkorSwim Greeks tab)",
+    )
+
+    if st.button("💾 Save Marks", key=f"save_marks_{trade_id}", type="primary"):
+        if not trade_id:
+            st.warning("Cannot update — no trade_id on this position. Check trade_log.csv.")
+            return
+        try:
+            updates = {}
+            if new_long  > 0: updates["current_value"]   = new_long
+            if new_short > 0: updates["mark"]             = new_short
+            if new_spot  > 0: updates["spot_open"]        = new_spot
+            if new_delta > 0: updates["short_delta"]      = new_delta
+
+            if new_long > 0 and new_short > 0:
+                import math
+                spread = new_long - new_short
+                updates["current_spread_value"] = round(spread, 4)
+                short_dte = max(int(float(pos.get("short_dte") or 7)), 1)
+                new_short_est = new_short * math.sqrt(7 / short_dte)
+                roll_credit   = max(round(new_short_est - new_short, 4), 0.0)
+                updates["proposed_roll_credit"] = roll_credit
+
+            logger.update_trade(trade_id, updates)
+            st.success(
+                f"✅ Marks updated. "
+                f"Spread value: ${new_long - new_short:.2f} | "
+                f"Roll credit est: ${updates.get('proposed_roll_credit', 0):.2f}"
+            )
+            st.rerun()
+        except Exception as e:
+            st.error(f"Update failed: {e}")
+            st.exception(e)
+
+
+# ─────────────────────────────────────────────
+# CLOSE TRADE FORM (unified update + close)
+# ─────────────────────────────────────────────
+
+def _render_close_trade_form(trade: dict, logger) -> None:
+    """
+    Unified form under each open position:
+      - Update current marks (for harvest signals)
+      - Close the trade (records exit price + P&L)
+
+    Values to enter from ThinkorSwim / Schwab Positions tab:
+      Mark column   → long leg mark / short leg mark
+      P/L Open $    → realized P&L
+    """
+    import math
+    trade_id = trade.get("trade_id", "")
+    sym      = trade.get("symbol", "")
+    entry_px = abs(float(trade.get("entry_price") or 0))
+    contracts = max(1, int(float(trade.get("contracts") or 1)))
+
+    st.caption(f"Trade: `{trade_id}` | {sym} {trade.get('strategy_type','')} | Entry ${entry_px:.2f}")
+
+    # ── Update marks ─────────────────────────────────────────────────────────
+    st.markdown("**Update current marks** *(from ThinkorSwim Mark column)*")
+    m1, m2, m3, m4 = st.columns(4)
+
+    cur_long  = float(trade.get("current_long_mid")  or trade.get("current_value") or 0)
+    cur_short = float(trade.get("current_short_mid") or trade.get("mark") or 0)
+    cur_spot  = float(trade.get("live_spot") or trade.get("spot_open") or 0)
+    cur_delta = abs(float(trade.get("short_delta") or 0))
+
+    new_long  = m1.number_input("Long mark $",  min_value=0.0, value=cur_long,
+                                 step=0.05, format="%.2f", key=f"cl_long_{trade_id}")
+    new_short = m2.number_input("Short mark $", min_value=0.0, value=cur_short,
+                                 step=0.05, format="%.2f", key=f"cl_short_{trade_id}")
+    new_spot  = m3.number_input("Spot $",       min_value=0.0, value=cur_spot,
+                                 step=0.5,  format="%.2f", key=f"cl_spot_{trade_id}")
+    new_delta = m4.number_input("Short delta",  min_value=0.0, max_value=1.0, value=cur_delta,
+                                 step=0.01, format="%.2f", key=f"cl_delta_{trade_id}")
+
+    if st.button("💾 Save Marks", key=f"save_m_{trade_id}"):
+        updates = {}
+        if new_long  > 0:
+            updates["current_long_mid"] = new_long
+            updates["current_value"]    = new_long
+        if new_short > 0:
+            updates["current_short_mid"] = new_short
+            updates["mark"]              = new_short
+        if new_spot  > 0: updates["live_spot"]   = new_spot
+        if new_delta > 0: updates["short_delta"] = new_delta
+
+        if new_long > 0 and new_short > 0:
+            spread = round(new_long - new_short, 4)
+            updates["current_spread_value"] = spread
+            short_dte = max(int(float(trade.get("short_dte") or 7)), 1)
+            new_short_est = new_short * math.sqrt(max(7, short_dte) / short_dte)
+            roll_credit   = round(max(new_short_est - new_short, 0.0), 4)
+            updates["proposed_roll_credit"] = roll_credit
+            pnl_est = round((spread - entry_px) * 100 * contracts, 2)
+            st.info(
+                f"Spread: ${spread:.2f} | Entry: ${entry_px:.2f} | "
+                f"Est P&L: ${pnl_est:+.0f} | "
+                f"Roll credit est: ${roll_credit:.2f}"
+            )
+
+        if updates:
+            logger.update_trade(trade_id, updates)
+            st.success("Marks saved.")
+            st.rerun()
+
+    st.divider()
+
+    # ── Close trade ───────────────────────────────────────────────────────────
+    st.markdown("**Close this trade** *(mark as exited)*")
+    cl1, cl2, cl3 = st.columns(3)
+
+    exit_spread = cl1.number_input(
+        "Exit spread value $",
+        min_value=0.0,
+        value=float(trade.get("current_spread_value") or 0),
+        step=0.05, format="%.2f",
+        key=f"exit_px_{trade_id}",
+        help="Current spread value (long mark − short mark) at time of close",
+    )
+    pnl_input = cl2.number_input(
+        "P&L $ (from broker)",
+        value=round((exit_spread - entry_px) * 100 * contracts, 2) if exit_spread > 0 else 0.0,
+        step=1.0, format="%.2f",
+        key=f"pnl_in_{trade_id}",
+        help="P/L Open $ from ThinkorSwim — or leave as calculated",
+    )
+    reason = cl3.selectbox(
+        "Exit reason",
+        ["target_hit", "stop_hit", "rolled", "expiry", "manual_close", "assignment"],
+        key=f"reason_{trade_id}",
+    )
+
+    if st.button("🔴 Close Trade", key=f"close_{trade_id}", type="primary"):
+        ok = logger.close_trade(trade_id, exit_spread, pnl_input, reason)
+        if ok:
+            st.success(f"Trade `{trade_id}` closed — P&L ${pnl_input:+.2f}")
+            st.rerun()
+        else:
+            st.error("Close failed — trade ID not found in log.")
 
 
 if __name__ == "__main__":
