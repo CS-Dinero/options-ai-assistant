@@ -741,8 +741,8 @@ def _render_trade_log_panel(ranked: list[dict], market: dict, derived: dict):
     log_dir.mkdir(parents=True, exist_ok=True)
     logger = TradeLogger(log_dir=log_dir)
 
-    log_tab, positions_tab, stats_tab = st.tabs(
-        ["📤 Log Scan", "📂 Open Positions", "📊 Performance Stats"]
+    log_tab, entry_tab, positions_tab, stats_tab = st.tabs(
+        ["📤 Log Scan", "➕ Enter Trade", "📂 Open Positions", "📊 Performance Stats"]
     )
 
     # ── Log Scan ──────────────────────────────────────────────────────────────
@@ -807,6 +807,10 @@ def _render_trade_log_panel(ranked: list[dict], market: dict, derived: dict):
                 mime="text/csv",
                 use_container_width=True,
             )
+
+    # ── Enter Trade ───────────────────────────────────────────────────────────
+    with entry_tab:
+        _render_trade_entry_form(logger)
 
     # ── Open Positions ────────────────────────────────────────────────────────
     with positions_tab:
@@ -2396,6 +2400,164 @@ def _render_portfolio_harvest_panel(portfolio_output: dict) -> None:
                 f'`{sym} {strat}` — roll credit **${cred:.2f}** | flip: {flip}',
                 unsafe_allow_html=True,
             )
+
+
+def _render_trade_entry_form(logger) -> None:
+    """
+    ➕ Enter Trade — manual position entry form.
+
+    Writes directly to trade_log.csv so the position tracker,
+    harvest engine, flip optimizer, and bot pipeline can work on it.
+
+    Works for trades opened in any broker (ThinkorSwim, Schwab, IBKR, etc.)
+    without any API connection.
+    """
+    import os
+    from datetime import date, datetime
+
+    st.markdown("### ➕ Log a Trade from ThinkorSwim / Schwab")
+    st.caption(
+        "Enter any open options position here. "
+        "Once logged, it appears in the Positions tab with harvest signals, "
+        "flip recommendations, and bot action."
+    )
+
+    # ── Strategy selector ─────────────────────────────────────────────────────
+    STRATEGY_OPTIONS = {
+        "calendar":        "📅 Calendar (same strike, different expiry)",
+        "diagonal":        "↗ Diagonal (different strike + expiry)",
+        "bull_put":        "🟢 Bull Put Credit Spread",
+        "bear_call":       "🔴 Bear Call Credit Spread",
+        "bull_call_debit": "↑ Bull Call Debit Spread",
+        "bear_put_debit":  "↓ Bear Put Debit Spread",
+        "double_diagonal": "⇔ Double Diagonal",
+    }
+
+    with st.form("trade_entry_form", clear_on_submit=True):
+        st.markdown("**Position details**")
+
+        r1c1, r1c2, r1c3 = st.columns(3)
+        symbol        = r1c1.text_input("Symbol", value="", placeholder="e.g. TSLA").upper().strip()
+        strategy_key  = r1c2.selectbox("Strategy", list(STRATEGY_OPTIONS.keys()),
+                                        format_func=lambda k: STRATEGY_OPTIONS[k])
+        option_side   = r1c3.selectbox("Option type", ["call","put"])
+
+        st.markdown("**Strikes & expirations**")
+        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+        short_strike      = r2c1.number_input("Short strike $", min_value=0.0, step=0.5, format="%.2f")
+        long_strike       = r2c2.number_input("Long strike $",  min_value=0.0, step=0.5, format="%.2f")
+        short_expiration  = r2c3.date_input("Short expiry",  value=date.today())
+        long_expiration   = r2c4.date_input("Long expiry",   value=date.today())
+
+        st.markdown("**Entry economics**")
+        r3c1, r3c2, r3c3, r3c4 = st.columns(4)
+        entry_price = r3c1.number_input(
+            "Entry debit / credit $",
+            min_value=-999.0, max_value=999.0, step=0.01, format="%.2f",
+            help="Debit = positive (you paid). Credit = negative (you received).",
+        )
+        contracts  = r3c2.number_input("Contracts", min_value=1, max_value=100, value=1, step=1)
+        spot_open  = r3c3.number_input("Spot price at entry $", min_value=0.0, step=0.01, format="%.2f")
+        date_open  = r3c4.date_input("Date opened", value=date.today())
+
+        st.markdown("**Optional fields** (improve harvest + flip signals)")
+        r4c1, r4c2, r4c3, r4c4 = st.columns(4)
+        short_delta = r4c1.number_input("Short delta",  min_value=-1.0, max_value=1.0, step=0.01, format="%.2f")
+        long_delta  = r4c2.number_input("Long delta",   min_value=-1.0, max_value=1.0, step=0.01, format="%.2f")
+        entry_iv    = r4c3.number_input("Entry IV (e.g. 0.45)", min_value=0.0, max_value=5.0, step=0.01, format="%.3f")
+        score       = r4c4.number_input("Score (0–100)", min_value=0, max_value=100, value=0, step=1)
+
+        r5c1, r5c2 = st.columns(2)
+        tether_id  = r5c1.text_input("Tether ID (optional)", placeholder="e.g. TSLA_CAL_001",
+                                      help="Links legs together for harvest tracking.")
+        notes      = r5c2.text_input("Notes", placeholder="e.g. ATM calendar, earnings play")
+
+        submitted = st.form_submit_button("💾 Log Trade", type="primary", use_container_width=True)
+
+    if not submitted:
+        return
+
+    # ── Validation ────────────────────────────────────────────────────────────
+    errors = []
+    if not symbol:
+        errors.append("Symbol is required.")
+    if short_strike <= 0 and long_strike <= 0:
+        errors.append("At least one strike must be > 0.")
+    if short_expiration > long_expiration and strategy_key in ("calendar","diagonal","double_diagonal"):
+        errors.append("Long expiry must be on or after short expiry for multi-leg structures.")
+    if errors:
+        for e in errors:
+            st.error(e)
+        return
+
+    # ── Build trade row ───────────────────────────────────────────────────────
+    from backtest.trade_logger import _generate_id
+    trade_id   = _generate_id("M")   # "M" prefix = manually entered
+
+    # Compute DTEs
+    today = date.today()
+    short_dte_val = max((short_expiration - today).days, 0)
+    long_dte_val  = max((long_expiration  - today).days, 0)
+
+    # Estimate max loss for credit spreads
+    spread_width = abs(short_strike - long_strike) * 100 * contracts
+    max_loss_est = (
+        max(spread_width - abs(entry_price) * 100 * contracts, 0.0)
+        if strategy_key in ("bull_put","bear_call") else
+        abs(entry_price) * 100 * contracts
+    )
+
+    candidate = {
+        "trade_id":         trade_id,
+        "symbol":           symbol,
+        "strategy_type":    strategy_key,
+        "direction":        f"{option_side}_{strategy_key}",
+        "option_side":      option_side,
+        "short_strike":     short_strike if short_strike > 0 else None,
+        "long_strike":      long_strike  if long_strike  > 0 else None,
+        "short_expiration": short_expiration.isoformat(),
+        "long_expiration":  long_expiration.isoformat(),
+        "short_dte":        short_dte_val,
+        "long_dte":         long_dte_val,
+        "contracts":        contracts,
+        "entry_debit_credit": entry_price,
+        "entry_price":      abs(entry_price),
+        "max_loss":         max_loss_est,
+        "target_exit_value":round(abs(entry_price) * 1.20, 4),
+        "stop_value":       round(abs(entry_price) * 0.75, 4),
+        "short_delta":      short_delta if short_delta != 0 else None,
+        "long_delta":       long_delta  if long_delta  != 0 else None,
+        "confidence_score": score if score > 0 else None,
+        "notes":            f"tether:{tether_id} | {notes}".strip(" |") if tether_id else notes,
+    }
+    market_ctx = {
+        "symbol":    symbol,
+        "spot_price": spot_open,
+    }
+    derived_ctx = {}
+    if entry_iv > 0:
+        derived_ctx["iv_regime"] = (
+            "elevated" if entry_iv > 0.30 else
+            "moderate" if entry_iv > 0.20 else "low"
+        )
+
+    try:
+        trade_id_returned = logger.open_trade(candidate, market_ctx, derived_ctx,
+                                               notes=candidate["notes"])
+        st.success(f"✅ Trade logged: `{trade_id_returned}`")
+        st.caption(
+            f"**{symbol}** {STRATEGY_OPTIONS[strategy_key]} | "
+            f"${short_strike} / ${long_strike} | "
+            f"{short_expiration} / {long_expiration} | "
+            f"{contracts} contract(s) | entry ${entry_price:+.2f}"
+        )
+        st.info(
+            "👉 Switch to **📍 Positions** tab to see harvest signals, "
+            "flip recommendations, and bot action for this trade."
+        )
+    except Exception as e:
+        st.error(f"Failed to log trade: {e}")
+        st.exception(e)
 
 
 if __name__ == "__main__":
