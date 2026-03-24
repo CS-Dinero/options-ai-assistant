@@ -411,6 +411,22 @@ class PositionTracker:
                 bot = {"bot_action":"HOLD","bot_priority":6,"urgency":"LOW",
                        "rationale":"Bot unavailable.","recommended_contract_add":0}
 
+            # Live strike selector — propose replacement structures if chain available
+            roll_candidate_inputs = []
+            roll_preview = None
+            try:
+                live_chain = enriched.get("_live_chain", [])
+                if live_chain:
+                    from engines.live_strike_selector import build_live_roll_candidates
+                    from position_manager.roll_credit_calculator import calculate_best_roll
+                    roll_candidate_inputs = build_live_roll_candidates(
+                        enriched, mctx, live_chain)[:5]
+                    if roll_candidate_inputs:
+                        roll_preview = calculate_best_roll(
+                            enriched, mctx, roll_candidate_inputs)
+            except Exception:
+                pass
+
             enriched.update({
                 "net_liq":                  harvest["net_liq"],
                 "harvestable_equity":       harvest["harvestable_equity"],
@@ -429,6 +445,8 @@ class PositionTracker:
                 "bot_rationale":            bot["rationale"],
                 "recommended_contract_add": bot["recommended_contract_add"],
                 "bot_summary":              bot,
+                "roll_candidate_inputs":    roll_candidate_inputs,
+                "roll_preview":             roll_preview,
             })
         except Exception:
             pass

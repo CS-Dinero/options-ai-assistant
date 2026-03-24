@@ -132,7 +132,7 @@ def render_flip_preview(position_row: dict[str, Any]) -> None:
         st.warning(f"**Risk note:** {risk_note}")
     st.caption(f"Confidence: **{confidence}**  |  Score threshold: 20+ to qualify")
 
-    # All candidates (expandable)
+    # All flip optimizer candidates (expandable)
     all_cands = flip.get("all_candidates")
     if all_cands:
         with st.expander("All flip candidates scored"):
@@ -146,6 +146,54 @@ def render_flip_preview(position_row: dict[str, Any]) -> None:
                     f'— {valid_str} — {cand.get("rationale","")}',
                     unsafe_allow_html=True,
                 )
+
+    # ── Live selector candidates ──────────────────────────────────────────────
+    roll_preview = position_row.get("roll_preview") or {}
+    sel_cands    = position_row.get("roll_candidate_inputs") or []
+
+    if roll_preview and isinstance(roll_preview, dict):
+        best_roll = roll_preview.get("best_roll")
+        if best_roll:
+            st.divider()
+            st.markdown("**E — Best Live Roll Candidate**")
+            action_col = {"GOLD HARVEST":"#f59e0b","ROLL":"#22c55e","WATCH":"#3b82f6"}.get(
+                best_roll.get("action_label",""), "#6b7280")
+            e1, e2, e3, e4 = st.columns(4)
+            e1.markdown(
+                f'<span style="background:{action_col};color:#fff;padding:3px 12px;'
+                f'border-radius:20px;font-size:11px;font-weight:700">'
+                f'{best_roll.get("action_label","—")}</span>',
+                unsafe_allow_html=True,
+            )
+            e2.metric("Roll Credit",  f'${_sf(best_roll.get("estimated_roll_credit")):.2f}')
+            e3.metric("Max Loss",     f'${_sf(best_roll.get("estimated_max_loss")):.0f}')
+            e4.metric("Score",        f'{_sf(best_roll.get("quality_score")):.0f}')
+
+            st.caption(
+                f'**{best_roll.get("target_structure","").replace("_"," ").title()}** '
+                f'${best_roll.get("target_short_strike",0):.0f}/'
+                f'${best_roll.get("target_long_strike",0):.0f} | '
+                f'{best_roll.get("target_short_expiration","—")} / '
+                f'{best_roll.get("target_long_expiration","—")}'
+            )
+            st.caption(best_roll.get("rationale",""))
+
+    if len(sel_cands) > 1:
+        with st.expander(f"All {len(sel_cands)} live structure candidates"):
+            import pandas as pd
+            rows = []
+            for sc in sel_cands[:10]:
+                rows.append({
+                    "Structure": sc.get("target_structure","").replace("_"," ").title(),
+                    "Short $":   sc.get("target_short_strike",""),
+                    "Long $":    sc.get("target_long_strike",""),
+                    "Exp":       sc.get("target_short_expiration",""),
+                    "Credit":    f'${_sf(sc.get("estimated_opening_credit_or_debit")):.2f}',
+                    "Score":     f'{_sf(sc.get("selector_score")):.0f}',
+                    "Rolls→Free": sc.get("rolls_to_free_heuristic","—"),
+                    "Gold ETA":  sc.get("gold_harvest_eta_heuristic","—"),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _build_risk_note(position_row: dict, flip: dict) -> str:

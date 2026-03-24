@@ -701,6 +701,77 @@ def main():
             _manual_path = _Path("data/positions/open_positions.csv")
         _tracker  = PositionTracker(trade_log_path=_log_path, manual_csv_path=_manual_path)
         _snapshot = _tracker.snapshot(derived=derived, spot=market.get("spot_price", 0))
+        # Fallback: supplement with TradeLogger open trades to survive /tmp resets
+        if _snapshot["total_open"] == 0:
+            try:
+                from backtest.trade_logger import TradeLogger as _TradeLogger
+                _tl_logger = _TradeLogger(log_dir=_log_path.parent)
+                _logger_positions = _tl_logger.get_open_trades()
+                if _logger_positions:
+                    import tempfile as _tf, csv as _csv
+                    from pathlib import Path as _PF
+                    _tmp_manual = _PF(_tf.mktemp(suffix=".csv"))
+                    _fields = list(_logger_positions[0].keys())
+                    with open(_tmp_manual, "w", newline="") as _f:
+                        _w = _csv.DictWriter(_f, fieldnames=_fields, extrasaction="ignore")
+                        _w.writeheader(); _w.writerows(_logger_positions)
+                    _snapshot = PositionTracker(trade_log_path=_log_path,
+                                                manual_csv_path=_tmp_manual).snapshot(
+                                                    derived=derived, spot=market.get("spot_price", 0))
+            except Exception:
+                pass
+
+        # Inject current chain into position rows for live strike selector
+        if _snapshot["total_open"] > 0:
+            try:
+                from providers.provider_factory import build_provider as _bp
+                import os as _os3
+                _chain_cache: dict = {}
+                for _bucket in ("calendar_diagonal", "credit_spreads"):
+                    for _prow in _snapshot.get(_bucket, []):
+                        _psym = str(_prow.get("symbol","")).upper()
+                        if _psym and _psym not in _chain_cache:
+                            try:
+                                if data_mode == "massive":
+                                    _ak = ""
+                                    try:
+                                        import streamlit as _st3
+                                        _ak = _st3.secrets.get("MASSIVE_API_KEY","")
+                                    except Exception:
+                                        _ak = _os3.getenv("MASSIVE_API_KEY","")
+                                    if _ak:
+                                        _prov_tmp = _bp("massive", api_key=_ak)
+                                        _chain_cache[_psym] = _prov_tmp.get_chain(_psym)
+                                elif data_mode == "csv":
+                                    _prov_tmp = _bp("csv")
+                                    _chain_cache[_psym] = _prov_tmp.get_chain(_psym)
+                                else:
+                                    _prov_tmp = _bp("mock")
+                                    _chain_cache[_psym] = _prov_tmp.get_chain(_psym)
+                            except Exception:
+                                _chain_cache[_psym] = []
+                        _prow["_live_chain"] = _chain_cache.get(_psym, [])
+            except Exception:
+                pass
+
+        # Enrich positions with live market data (massive only — additive, silent on failure)
+        if data_mode in ("massive",) and _snapshot["total_open"] > 0:
+            try:
+                from position_manager.position_enricher import enrich_snapshot_with_live_data
+                from providers.provider_factory import build_provider
+                import os as _os2
+                _api_key = ""
+                try:
+                    import streamlit as _st2
+                    _api_key = _st2.secrets.get("MASSIVE_API_KEY","")
+                except Exception:
+                    _api_key = _os2.getenv("MASSIVE_API_KEY","")
+                if _api_key:
+                    _live_prov = build_provider("massive", api_key=_api_key)
+                    _snapshot  = enrich_snapshot_with_live_data(_snapshot, _live_prov)
+            except Exception:
+                pass
+
         _render_harvest_view(_snapshot, market, derived)
         st.divider()
         # Full lifecycle detail below harvest summary
@@ -2234,10 +2305,14 @@ def _render_harvest_row(pos: dict, market: dict, derived: dict) -> None:
     trap_dist    = pos.get("gamma_trap_distance")
     sentiment    = pos.get("sentiment_score", 0.0)
     flip_rec     = pos.get("flip_recommendation", "HOLD_STRUCTURE")
+    bot_action   = pos.get("bot_action", "HOLD")
+    bot_priority = pos.get("bot_priority", 6)
+    bot_rationale= pos.get("bot_rationale", "")
+    contracts_add= pos.get("recommended_contract_add", 0)
     sym          = pos.get("symbol", "")
     struct       = pos.get("strategy_type", "").replace("_", " ").title()
     action       = (pos.get("decision", {}).get("action")
-                    or pos.get("management_status", "HOLD"))
+                    or pos.get("management_status", bot_action))
 
     border_color = {
         "GOLD":  "#f59e0b",
@@ -2274,12 +2349,25 @@ def _render_harvest_row(pos: dict, market: dict, derived: dict) -> None:
         f'<div><div style="font-size:9px;color:#6b7280">Flip Rec</div>'
         f'<div style="font-size:10px;color:#9ca3af">'
         f'{flip_rec.replace("_"," ").replace("HOLD STRUCTURE","—")}</div></div>'
+        f'</div>'
+        # Bot action row
+        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid #1f2937">'
+        f'<div><div style="font-size:9px;color:#6b7280">Bot Action</div>'
+        f'<div style="font-size:12px;font-weight:700;color:{{"EXIT_NOW":"#ef4444","DE_RISK":"#f97316","HARVEST_NOW":"#f59e0b","FLIP_NOW":"#7c3aed","ROLL_NOW":"#22c55e","SCALE_IN":"#3b82f6","HOLD":"#6b7280"}}.get(bot_action,"#6b7280")'
+        f'">{bot_action.replace("_"," ")}</div></div>'
+        f'<div><div style="font-size:9px;color:#6b7280">Priority</div>'
+        f'<div style="font-size:12px;color:#e5e7eb">P{bot_priority}</div></div>'
+        f'<div><div style="font-size:9px;color:#6b7280">Add Contracts</div>'
+        f'<div style="font-size:12px;color:{"#3b82f6" if contracts_add > 0 else "#6b7280"}">'
+        f'{"+" + str(contracts_add) if contracts_add > 0 else "—"}</div></div>'
         f'</div></div>',
         unsafe_allow_html=True,
     )
+    if bot_rationale:
+        st.caption(f"🤖 {bot_rationale}")
 
     # Action buttons
-    bc1, bc2 = st.columns(2)
+    bc1, bc2, bc3 = st.columns(3)
     with bc1:
         if st.button("🔍 Ask Analyst", key=f"analyst_{sym}_{pos.get('short_strike',0)}",
                      use_container_width=True):
@@ -2311,6 +2399,15 @@ def _render_harvest_row(pos: dict, market: dict, derived: dict) -> None:
                 st.json(ticket_result["ticket"])
             else:
                 st.warning(ticket_result["reason"])
+
+    with bc3:
+        flip_cand = pos.get("flip_candidate") or (flip_rec not in ("HOLD_STRUCTURE",""))
+        if flip_cand:
+            if st.button("🔄 Preview Flip", key=f"flip_{sym}_{pos.get('short_strike',0)}",
+                         use_container_width=True):
+                from dashboard.flip_preview import render_flip_preview
+                with st.container():
+                    render_flip_preview(pos)
 
     # Update marks — inline expander under each position card
     with st.expander(f"✏️ Update marks for {sym}", expanded=False):
@@ -2381,16 +2478,26 @@ def _render_portfolio_harvest_panel(portfolio_output: dict) -> None:
     red_count    = sum(1 for p in all_positions if p.get("harvest_badge") == "RED")
     flip_count   = sum(1 for p in all_positions if p.get("flip_recommendation","HOLD_STRUCTURE") != "HOLD_STRUCTURE")
     assign_count = sum(1 for p in all_positions if (p.get("harvest_summary") or {}).get("assignment_risk"))
+    # Bot action counts
+    harvest_ct   = sum(1 for p in all_positions if p.get("bot_action") in ("HARVEST_NOW","ROLL_NOW"))
+    scale_ct     = sum(1 for p in all_positions if p.get("bot_action") == "SCALE_IN")
+    derisk_ct    = sum(1 for p in all_positions if p.get("bot_action") in ("DE_RISK","EXIT_NOW"))
+    total_add    = sum(p.get("recommended_contract_add", 0) or 0 for p in all_positions)
 
     st.divider()
     st.markdown("#### 🌾 Portfolio Harvest Summary")
     h1,h2,h3,h4,h5,h6 = st.columns(6)
-    h1.metric("Harvestable",  f"${total_harv:,.0f}")
-    h2.metric("🥇 Gold",      gold_count)
-    h3.metric("🟢 Green",     green_count)
-    h4.metric("🔴 Assign Risk", assign_count)
+    h1.metric("Harvestable",   f"${total_harv:,.0f}")
+    h2.metric("🥇 Harvest Now", harvest_ct)
+    h3.metric("🔵 Scale Ready", scale_ct)
+    h4.metric("🔴 De-Risk",    derisk_ct)
     h5.metric("🔵 Flip Ready", flip_count)
-    h6.metric("🚨 Trap Risk",  red_count)
+    h6.metric("⚠️ Assign Risk", assign_count)
+    if total_add > 0 or gold_count > 0:
+        s1,s2,s3 = st.columns(3)
+        s1.metric("Gold Harvests",    gold_count)
+        s2.metric("Contracts to Add", f"+{total_add}")
+        s3.metric("Green + Purple",   green_count + sum(1 for p in all_positions if p.get("harvest_badge")=="PURPLE"))
 
     # Top 3 roll opportunities
     rollable = sorted(
@@ -2692,14 +2799,27 @@ def _render_close_trade_form(trade: dict, logger) -> None:
     cur_spot  = float(trade.get("live_spot") or trade.get("spot_open") or 0)
     cur_delta = abs(float(trade.get("short_delta") or 0))
 
-    new_long  = m1.number_input("Long mark $",  min_value=0.0, value=cur_long,
-                                 step=0.05, format="%.2f", key=f"cl_long_{trade_id}")
-    new_short = m2.number_input("Short mark $", min_value=0.0, value=cur_short,
-                                 step=0.05, format="%.2f", key=f"cl_short_{trade_id}")
-    new_spot  = m3.number_input("Spot $",       min_value=0.0, value=cur_spot,
-                                 step=0.5,  format="%.2f", key=f"cl_spot_{trade_id}")
-    new_delta = m4.number_input("Short delta",  min_value=0.0, max_value=1.0, value=cur_delta,
-                                 step=0.01, format="%.2f", key=f"cl_delta_{trade_id}")
+    new_long  = m1.number_input("Long leg mark $",  min_value=0.0, max_value=500.0,
+                                 value=cur_long, step=0.05, format="%.2f", key=f"cl_long_{trade_id}",
+                                 help="Option price of your long leg — e.g. 24.87, NOT the strike (350)")
+    new_short = m2.number_input("Short leg mark $", min_value=0.0, max_value=500.0,
+                                 value=cur_short, step=0.05, format="%.2f", key=f"cl_short_{trade_id}",
+                                 help="Option price of your short leg — e.g. 24.05, NOT the strike (350)")
+    new_spot  = m3.number_input("Spot $",           min_value=0.0, value=cur_spot,
+                                 step=0.5,  format="%.2f", key=f"cl_spot_{trade_id}",
+                                 help="Current stock price — e.g. 367.96 for TSLA")
+    new_delta = m4.number_input("Short delta",      min_value=0.0, max_value=1.0, value=cur_delta,
+                                 step=0.01, format="%.2f", key=f"cl_delta_{trade_id}",
+                                 help="Abs value of short leg delta — 0.98 for deep ITM")
+
+    # Sanity warning if mark looks like a strike price
+    _spot_check = new_spot or cur_spot or 100.0
+    if new_long >= _spot_check or new_short >= _spot_check:
+        st.warning(
+            f"⚠️ Long mark ${new_long:.2f} or short mark ${new_short:.2f} looks like a strike price, "
+            f"not an option price. In ThinkorSwim, use the **Mark** column (e.g. $24.87), "
+            f"not the strike (e.g. $350)."
+        )
 
     if st.button("💾 Save Marks", key=f"save_m_{trade_id}"):
         updates = {}

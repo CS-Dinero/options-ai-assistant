@@ -35,23 +35,50 @@ def get_net_liquidation(position: dict[str, Any]) -> float:
     """
     Estimate net liquidation value for a tethered position.
 
-    Supports two naming conventions:
-      v26:    current_value / mark + entry_debit_credit / avg_price
-      v26.1:  long_leg_mid / short_leg_mid (tethered spread mark)
+    For calendars/diagonals: (long_mid - short_mid) × 100 × contracts
+    For credit/debit spreads: (current_value - entry) × 100 × contracts
 
     Returns positive = gain, negative = loss.
     """
-    # v26.1 spec: tethered leg midpoints
-    long_mid  = _sf(position.get("long_leg_mid"))
-    short_mid = _sf(position.get("short_leg_mid"))
-    if long_mid or short_mid:
-        qty = max(abs(int(_sf(position.get("quantity", 1)))), 1)
-        return round(((long_mid - short_mid) * 100) * qty, 2)
+    contracts = max(abs(int(_sf(position.get("contracts") or position.get("quantity") or 1))), 1)
+    spot      = _sf(position.get("live_spot") or position.get("spot_open") or position.get("spot_price"))
 
-    # v26: current_value / mark vs entry
-    mark  = _sf(position.get("current_value") or position.get("mark"))
-    entry = _sf(position.get("entry_debit_credit") or position.get("avg_price"))
-    return round((mark - abs(entry)) * 100, 2)
+    # Try current spread value (most reliable — stored directly after update_marks)
+    spread_val = _sf(position.get("current_spread_value"))
+    if spread_val != 0.0:
+        return round(spread_val * 100 * contracts, 2)
+
+    # Try leg-level midpoints (both naming conventions)
+    long_mid  = _sf(position.get("current_long_mid") or position.get("long_leg_mid"))
+    short_mid = _sf(position.get("current_short_mid") or position.get("short_leg_mid"))
+
+    # Sanity guard: option prices should be much smaller than the stock price.
+    # If mark >= spot, or mark is an unreasonably large multiple of entry, reject it.
+    def _is_valid_option_price(price: float, spot_ref: float, entry_ref: float = 0.0) -> bool:
+        if price <= 0:
+            return False
+        if spot_ref > 0 and price >= spot_ref * 0.50:
+            return False   # option shouldn't be worth more than 50% of stock price
+        if entry_ref > 0 and price > entry_ref * 30:
+            return False   # mark > 30× entry debit is almost certainly a strike
+        return True
+
+    entry_ref = _sf(position.get("entry_price") or position.get("entry_debit_credit") or position.get("avg_price"))
+
+    if (_is_valid_option_price(long_mid, spot, entry_ref) and
+            _is_valid_option_price(short_mid, spot, entry_ref)):
+        return round((long_mid - short_mid) * 100 * contracts, 2)
+
+    if _is_valid_option_price(long_mid, spot, entry_ref):
+        return round((long_mid - abs(entry_ref)) * 100 * contracts, 2)
+
+    # Final fallback: current mark vs entry
+    mark = _sf(position.get("current_value") or position.get("mark"))
+
+    if _is_valid_option_price(mark, spot, entry_ref) and mark > 0:
+        return round((mark - abs(entry_ref)) * 100 * contracts, 2)
+
+    return 0.0
 
 
 # ─────────────────────────────────────────────

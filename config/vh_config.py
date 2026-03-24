@@ -32,6 +32,31 @@ WALK_LIMIT_STEP:     float = 0.02    # credit step per walk interval ($/contract
 WALK_LIMIT_INTERVAL: int   = 30      # seconds between walk steps
 WALK_LIMIT_TIMEOUT:  int   = 180     # max seconds before abandoning
 
+# ── Symbol-specific selector config ──────────────────────────────────────────
+# Used by live_strike_selector.py to set per-symbol delta and width rules.
+# Wider symbols (TSLA) need more protection width.
+# Index ETFs (SPY/QQQ/IWM) are tighter and more liquid.
+
+SYMBOL_SELECTOR_CONFIG: dict = {
+    "TSLA": {"short_delta_min": 0.20, "short_delta_max": 0.35, "min_width": 10, "preferred_width": 15},
+    "AAPL": {"short_delta_min": 0.18, "short_delta_max": 0.30, "min_width": 5,  "preferred_width": 10},
+    "MSFT": {"short_delta_min": 0.18, "short_delta_max": 0.30, "min_width": 5,  "preferred_width": 10},
+    "SPY":  {"short_delta_min": 0.15, "short_delta_max": 0.25, "min_width": 5,  "preferred_width": 5},
+    "QQQ":  {"short_delta_min": 0.15, "short_delta_max": 0.25, "min_width": 5,  "preferred_width": 5},
+    "IWM":  {"short_delta_min": 0.15, "short_delta_max": 0.25, "min_width": 5,  "preferred_width": 5},
+    "NVDA": {"short_delta_min": 0.20, "short_delta_max": 0.35, "min_width": 10, "preferred_width": 15},
+    "AMD":  {"short_delta_min": 0.20, "short_delta_max": 0.35, "min_width": 5,  "preferred_width": 10},
+}
+
+# Default config for any symbol not in the table above
+DEFAULT_SELECTOR_CONFIG: dict = {
+    "short_delta_min": 0.15, "short_delta_max": 0.30,
+    "min_width": 5, "preferred_width": 10,
+}
+
+# Per-share credit unit (not total dollars)
+MIN_OPEN_CREDIT_PER_SHARE: float = 1.00
+
 # ── Badge labels ──────────────────────────────────────────────────────────────
 BADGE_GOLD:   str = "GOLD"       # roll credit >= GOLD_HARVEST_MIN_CREDIT
 BADGE_GREEN:  str = "GREEN"      # roll credit >= MIN_ROLL_NET_CREDIT
