@@ -527,6 +527,66 @@ def evaluate_skew_flip_transition(
         )
         merged = {**cand, **rollability, **camp_eval, **path_eval, **scored}
 
+        # Timing evaluation
+        timing_eval = {}
+        if action != "HOLD_CURRENT_HARVEST":
+            try:
+                from execution.time_window_engine import classify_time_window
+                from execution.timing_score_engine import evaluate_timing_quality
+                sess = classify_time_window()
+                # Attach surface score if available for timing blend
+                merged_for_timing = {**merged, "execution_surface_score": merged.get("execution_surface_score",0)}
+                timing_eval = evaluate_timing_quality(merged_for_timing, sess)
+                merged.update(timing_eval)
+                high_urgency = str(current_position.get("bot_priority","P6")) in ("P0","P1","P2")
+                if not timing_eval.get("timing_ok",False) and not high_urgency:
+                    rejected_list.append({"action":action,"reason":"Timing gate",
+                                          "timing_score":timing_eval.get("timing_score",0)})
+                    continue
+            except Exception:
+                timing_eval = {}
+
+        # Surface evaluation
+        surface_eval = {}
+        if action != "HOLD_CURRENT_HARVEST" and chain_bundle:
+            try:
+                from surface.vol_surface_snapshot import build_vol_surface_snapshot
+                from surface.skew_surface_engine import evaluate_skew_surface
+                from surface.term_structure_engine import evaluate_term_structure
+                from surface.execution_surface_filter import evaluate_execution_surface
+                snap = build_vol_surface_snapshot(chain_bundle, merged)
+                sk_ev= evaluate_skew_surface(snap)
+                tm_ev= evaluate_term_structure(snap)
+                sf_ev= evaluate_execution_surface(sk_ev, tm_ev)
+                merged.update(snap); merged.update(sk_ev); merged.update(tm_ev); merged.update(sf_ev)
+                surface_eval = sf_ev
+                high_urg2 = str(current_position.get("bot_priority","P6")) in ("P0","P1","P2")
+                if not sf_ev.get("execution_surface_ok",False) and not high_urg2:
+                    rejected_list.append({"action":action,"reason":"Surface gate",
+                                          "surface_score":sf_ev.get("execution_surface_score",0)})
+                    continue
+            except Exception:
+                surface_eval = {}
+
+        # Stagger policy + execution schedule
+        stagger_eval = {}
+        if action != "HOLD_CURRENT_HARVEST":
+            try:
+                from execution.stagger_policy_engine import decide_stagger_policy
+                from execution.execution_scheduler import build_execution_schedule
+                merged_for_stagger = {**merged, "transition_action":action,
+                                      "transition_rebuild_class":merged.get("rebuild_class","KEEP_LONG"),
+                                      "transition_timing_score":merged.get("timing_score",50),
+                                      "transition_avg_path_score":merged.get("avg_path_score",50),
+                                      "transition_liquidity_score":merged.get("liquidity_score",70),
+                                      "transition_execution_surface_score":merged.get("execution_surface_score",50)}
+                stag = decide_stagger_policy(merged_for_stagger)
+                sched= build_execution_schedule({**merged_for_stagger, **stag})
+                stagger_eval = {**stag, **sched}
+                merged.update(stagger_eval)
+            except Exception:
+                stagger_eval = {}
+
         # Apply empirical bias (after gates — biases only affect ranking)
         try:
             from engines.empirical_weight_adjuster import apply_empirical_bias
@@ -608,4 +668,20 @@ def evaluate_skew_flip_transition(
             f"roll {best.get('future_roll_score',0):.1f} | "
             f"path {best.get('avg_path_score',0):.0f}"
         ),
+        # Timing / surface / stagger fields
+        "timing_score":              best.get("timing_score",0.0),
+        "timing_ok":                 best.get("timing_ok",False),
+        "time_window":               best.get("time_window","OUTSIDE_RTH"),
+        "execution_surface_score":   best.get("execution_surface_score",0.0),
+        "execution_surface_ok":      best.get("execution_surface_ok",False),
+        "surface_local_richness":    best.get("surface_local_richness",0.0),
+        "surface_front_back_edge":   best.get("surface_front_back_edge",0.0),
+        "surface_long_short_edge":   best.get("surface_long_short_edge",0.0),
+        "surface_term_score":        best.get("surface_term_score",0.0),
+        "surface_harvest_curve_score":best.get("surface_harvest_curve_score",0.0),
+        "execution_policy":          best.get("execution_policy","DELAY"),
+        "size_fraction_now":         best.get("size_fraction_now",0.0),
+        "size_fraction_later":       best.get("size_fraction_later",1.0),
+        "execution_schedule":        best.get("execution_schedule","DEFER"),
+        "next_window":               best.get("next_window"),
     }

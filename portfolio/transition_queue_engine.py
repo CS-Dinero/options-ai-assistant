@@ -19,12 +19,14 @@ def build_transition_queue(rows: list[dict[str,Any]]) -> list[dict[str,Any]]:
         if not r.get("transition_portfolio_fit_ok",False): continue
         ps = PRIORITY_SCORE.get(str(r.get("bot_priority","P6")),40)
         qs = round(
-            0.22*_sf(r.get("transition_structure_score")) +
-            0.18*_sf(r.get("transition_campaign_improvement_score")) +
-            0.16*_sf(r.get("transition_avg_path_score")) +
-            0.18*_sf(r.get("transition_allocator_score")) +
-            0.12*_sf(r.get("transition_recycling_score")) +
-            0.14*ps, 2)
+            0.18*_sf(r.get("transition_structure_score")) +
+            0.15*_sf(r.get("transition_campaign_improvement_score")) +
+            0.12*_sf(r.get("transition_avg_path_score")) +
+            0.14*_sf(r.get("transition_allocator_score")) +
+            0.10*_sf(r.get("transition_recycling_score")) +
+            0.10*_sf(r.get("transition_timing_score")) +
+            0.09*_sf(r.get("transition_execution_surface_score")) +
+            0.12*ps, 2)
         queue.append({
             "position_id":        r.get("trade_id") or r.get("id"),
             "symbol":             r.get("symbol"),
@@ -34,6 +36,12 @@ def build_transition_queue(rows: list[dict[str,Any]]) -> list[dict[str,Any]]:
             "campaign_basis_after":_sf(r.get("transition_campaign_net_basis_after")),
             "allocator_score":    _sf(r.get("transition_allocator_score")),
             "priority":           r.get("bot_priority","P6"),
+            "time_window":        r.get("transition_time_window","—"),
+            "execution_policy":   r.get("transition_execution_policy","DELAY"),
+            "timing_score":       _sf(r.get("transition_timing_score")),
+            "surface_score":      _sf(r.get("transition_execution_surface_score")),
+            "queue_one_liner":    r.get("queue_one_liner",""),
+            "desk_note":          r.get("transition_desk_note",""),
         })
     return sorted(queue, key=lambda x: x["queue_score"], reverse=True)
 

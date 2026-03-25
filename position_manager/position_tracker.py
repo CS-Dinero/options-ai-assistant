@@ -512,6 +512,27 @@ class PositionTracker:
             enriched["transition_new_long_leg"]     = (transition_result.get("new_structure") or {}).get("long_leg")
             enriched["transition_new_short_leg"]    = (transition_result.get("new_structure") or {}).get("short_leg")
             enriched["transition_rejected_candidates"]= transition_result.get("rejected_candidates",[])
+            # Analyst narrative
+            try:
+                from analyst.narrative_engine import build_transition_narrative
+                from analyst.desk_summary_engine import build_queue_one_liner, build_blocked_one_liner, build_campaign_one_liner
+                from dashboard.ui_state_helpers import build_operational_tags
+                narrative = build_transition_narrative(enriched)
+                enriched["transition_winner_reasons"]    = narrative.get("winner_reasons",[])
+                enriched["transition_winner_summary"]    = narrative.get("winner_summary","")
+                enriched["transition_rejection_summary"] = narrative.get("rejection_summary","")
+                enriched["transition_invalidation_notes"]= narrative.get("invalidation_notes",[])
+                enriched["transition_invalidation_summary"]=narrative.get("invalidation_summary","")
+                enriched["transition_next_roll_notes"]   = narrative.get("next_roll_notes",[])
+                enriched["transition_next_roll_summary"] = narrative.get("next_roll_summary","")
+                enriched["transition_desk_note"]         = narrative.get("desk_note","")
+                enriched["queue_one_liner"]   = build_queue_one_liner(enriched)
+                enriched["blocked_one_liner"] = build_blocked_one_liner(enriched)
+                enriched["campaign_one_liner"]= build_campaign_one_liner(enriched)
+                enriched["operational_tags"]  = build_operational_tags(enriched)
+            except Exception:
+                pass
+
             # Rebuild class + campaign + path fields
             enriched["transition_rebuild_class"]       = transition_result.get("rebuild_class","KEEP_LONG")
             enriched["transition_new_long_leg"]        = (transition_result.get("new_structure") or {}).get("long_leg")
@@ -532,6 +553,25 @@ class PositionTracker:
             enriched["transition_composite_score_pre_bias"] = transition_result.get("composite_score_pre_bias",0.0)
             enriched["transition_empirical_bias_total"]= transition_result.get("empirical_bias_total",0.0)
             # Portfolio fit (requires full portfolio_state — default to OK until portfolio layer runs)
+            # Timing + surface + stagger fields
+            enriched["transition_timing_score"]          = transition_result.get("timing_score",0.0)
+            enriched["transition_timing_ok"]             = transition_result.get("timing_ok",False)
+            enriched["transition_time_window"]           = transition_result.get("time_window","OUTSIDE_RTH")
+            enriched["transition_execution_surface_score"]= transition_result.get("execution_surface_score",0.0)
+            enriched["transition_execution_surface_ok"]  = transition_result.get("execution_surface_ok",False)
+            enriched["transition_surface_local_richness"]= transition_result.get("surface_local_richness",0.0)
+            enriched["transition_surface_front_back_edge"]=transition_result.get("surface_front_back_edge",0.0)
+            enriched["transition_surface_term_score"]    = transition_result.get("surface_term_score",0.0)
+            enriched["transition_surface_harvest_curve_score"]=transition_result.get("surface_harvest_curve_score",0.0)
+            enriched["transition_execution_policy"]      = transition_result.get("execution_policy","DELAY")
+            enriched["transition_size_fraction_now"]     = transition_result.get("size_fraction_now",0.0)
+            enriched["transition_size_fraction_later"]   = transition_result.get("size_fraction_later",1.0)
+            enriched["transition_execution_schedule"]    = transition_result.get("execution_schedule","DEFER")
+            enriched["transition_next_window"]           = transition_result.get("next_window")
+            # Fill quality placeholders
+            enriched.setdefault("transition_latest_fill_score",0.0)
+            enriched.setdefault("transition_latest_slippage_dollars",0.0)
+            enriched.setdefault("transition_latest_slippage_pct",0.0)
             enriched.setdefault("transition_portfolio_fit_ok", True)
             enriched.setdefault("transition_allocator_score", 75.0)
             enriched.setdefault("transition_recycling_score", transition_result.get("basis_reduction",0.0)*20)

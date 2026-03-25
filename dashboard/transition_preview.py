@@ -198,6 +198,50 @@ def render_transition_preview(position_row: dict[str, Any]) -> None:
         tw = _sf(position_row.get("transition_target_width"))
         if tw: st.caption(f"Target width: ${tw:.1f}")
 
+    # ── I. Timing & execution plan ───────────────────────────────────────────
+    st.divider()
+    st.markdown("**I — Timing & Execution Plan**")
+    i1,i2,i3,i4 = st.columns(4)
+    i1.metric("Window",    str(position_row.get("transition_time_window","—")))
+    i2.metric("Timing Score", f'{_sf(position_row.get("transition_timing_score")):.0f}')
+    i3.metric("Policy",    str(position_row.get("transition_execution_policy","DELAY")))
+    i4.metric("Schedule",  str(position_row.get("transition_execution_schedule","DEFER")))
+    j1,j2,j3 = st.columns(3)
+    j1.metric("Now %",  f'{_sf(position_row.get("transition_size_fraction_now"))*100:.0f}%')
+    j2.metric("Later %",f'{_sf(position_row.get("transition_size_fraction_later"))*100:.0f}%')
+    j3.metric("Next Window", str(position_row.get("transition_next_window","—")))
+
+    # ── J. Vol surface ────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**J — Volatility Surface Quality**")
+    k1,k2,k3 = st.columns(3)
+    k1.metric("Surface Score",  f'{_sf(position_row.get("transition_execution_surface_score")):.0f}')
+    k2.metric("Local Richness", f'{_sf(position_row.get("transition_surface_local_richness")):.3f}')
+    k3.metric("Front-Back Edge",f'{_sf(position_row.get("transition_surface_front_back_edge")):.3f}')
+    k4,k5 = st.columns(2)
+    k4.metric("Long-Short Edge",f'{_sf(position_row.get("transition_surface_long_short_edge")):.3f}')
+    k5.metric("Harvest Curve",  f'{_sf(position_row.get("transition_surface_harvest_curve_score")):.0f}')
+
+    # ── K. Analyst view ───────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**K — Analyst View**")
+    desk=str(position_row.get("transition_desk_note",""))
+    if desk: st.info(desk)
+    reasons=position_row.get("transition_winner_reasons",[])
+    if reasons:
+        with st.expander("Why this won"):
+            for r in reasons: st.caption(f"✓ {r}")
+    rej_sum=str(position_row.get("transition_rejection_summary",""))
+    if rej_sum: st.caption(f"**Alternatives:** {rej_sum}")
+    inv=position_row.get("transition_invalidation_notes",[])
+    if inv:
+        with st.expander("Invalidation conditions"):
+            for n in inv: st.caption(f"⚠️ {n}")
+    nxt=position_row.get("transition_next_roll_notes",[])
+    if nxt:
+        with st.expander("Next roll plan"):
+            for n in nxt: st.caption(f"→ {n}")
+
     # ── H. Portfolio fit ──────────────────────────────────────────────────────
     alloc = _sf(position_row.get("transition_allocator_score",75.0))
     rec   = _sf(position_row.get("transition_recycling_score"))
