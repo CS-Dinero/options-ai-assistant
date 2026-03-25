@@ -2409,6 +2409,40 @@ def _render_harvest_row(pos: dict, market: dict, derived: dict) -> None:
                 with st.container():
                     render_flip_preview(pos)
 
+    # Transition preview — only for calendars/diagonals with approved transition
+    if pos.get("transition_is_credit_approved") and pos.get("transition_action") != "HOLD_CURRENT_HARVEST":
+        trans_color = {
+            "FLIP_TO_CALL_DIAGONAL":      "#1d4ed8",
+            "FLIP_TO_PUT_DIAGONAL":       "#dc2626",
+            "CONVERT_TO_BULL_PUT_SPREAD": "#16a34a",
+            "CONVERT_TO_BEAR_CALL_SPREAD":"#f97316",
+        }.get(pos.get("transition_action",""), "#6b7280")
+        st.markdown(
+            f'<div style="margin:6px 0;padding:6px 12px;border-left:4px solid {trans_color};'
+            f'background:#0f1117;border-radius:6px">'
+            f'<strong style="color:{trans_color}">'
+            f'{pos.get("transition_action","").replace("_"," ")}</strong> · '
+            f'Credit ${pos.get("transition_net_credit",0):.2f}/share · '
+            f'Roll score {pos.get("transition_future_roll_score",0):.0f}</div>',
+            unsafe_allow_html=True,
+        )
+        with st.expander("🔄 Preview Transition", expanded=False):
+            from dashboard.transition_preview import render_transition_preview, render_transition_orders
+            from execution.transition_ticket_builder import build_transition_ticket
+            render_transition_preview(pos)
+            ticket = build_transition_ticket(pos, {
+                "recommended_action": pos.get("transition_action"),
+                "transition_net_credit": pos.get("transition_net_credit",0),
+                "why": pos.get("transition_why",[]),
+                "new_structure": {
+                    "type":      pos.get("transition_new_structure_type",""),
+                    "long_leg":  pos.get("transition_new_long_leg"),
+                    "short_leg": pos.get("transition_new_short_leg"),
+                },
+            })
+            st.divider()
+            render_transition_orders(pos, ticket)
+
     # Update marks — inline expander under each position card
     with st.expander(f"✏️ Update marks for {sym}", expanded=False):
         _render_update_marks_form(pos)

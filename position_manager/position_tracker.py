@@ -427,6 +427,77 @@ class PositionTracker:
             except Exception:
                 pass
 
+            # Skew-flip transition engine — runs on calendars and diagonals
+            transition_result = {}
+            try:
+                structure_t = str(enriched.get("strategy_type","")).lower()
+                long_leg_d  = enriched.get("long_leg") or {}
+                short_leg_d = enriched.get("short_leg") or {}
+                # Need at minimum a short_leg dict to run transition engine
+                if not short_leg_d and enriched.get("short_strike"):
+                    short_leg_d = {
+                        "option_type": enriched.get("option_side","call"),
+                        "strike":      float(enriched.get("short_strike",0)),
+                        "expiry":      enriched.get("short_expiration",""),
+                        "expiration":  enriched.get("short_expiration",""),
+                        "dte":         int(float(enriched.get("short_dte",7))),
+                        "bid":  float(enriched.get("current_short_mid",0) or 0),
+                        "ask":  float(enriched.get("current_short_mid",0) or 0)*1.05,
+                        "mid":  float(enriched.get("current_short_mid",0) or 0),
+                        "delta":float(enriched.get("short_delta",0) or 0),
+                    }
+                if not long_leg_d and enriched.get("long_strike"):
+                    long_leg_d = {
+                        "option_type": enriched.get("option_side","call"),
+                        "strike":      float(enriched.get("long_strike",0)),
+                        "expiry":      enriched.get("long_expiration",""),
+                        "expiration":  enriched.get("long_expiration",""),
+                        "dte":         int(float(enriched.get("long_dte",30))),
+                        "bid":  float(enriched.get("current_long_mid",0) or 0)*0.95,
+                        "ask":  float(enriched.get("current_long_mid",0) or 0)*1.05,
+                        "mid":  float(enriched.get("current_long_mid",0) or 0),
+                        "delta":0.90,
+                    }
+
+                live_chain = enriched.get("_live_chain", [])
+                if live_chain and short_leg_d and long_leg_d and                         "calendar" in structure_t or "diagonal" in structure_t:
+                    from engines.skew_flip_harvest_engine import evaluate_skew_flip_transition
+                    chain_bundle = {
+                        "calls": [r for r in live_chain if str(r.get("option_type","")).lower()=="call"],
+                        "puts":  [r for r in live_chain if str(r.get("option_type","")).lower()=="put"],
+                        "put_side_richness":  float(mctx.get("put_25d_iv",0) or 0),
+                        "call_side_richness": float(mctx.get("call_25d_iv",0) or 0),
+                    }
+                    pos_for_transition = {
+                        **enriched,
+                        "long_leg":  long_leg_d,
+                        "short_leg": short_leg_d,
+                        "current_risk_basis": abs(_sf(enriched.get("entry_debit_credit")
+                                                    or enriched.get("entry_price",0.85))),
+                    }
+                    transition_result = evaluate_skew_flip_transition(
+                        current_position=pos_for_transition,
+                        chain_bundle=chain_bundle,
+                        spot=float(mctx.get("spot_price",0)),
+                        market_context=mctx,
+                    )
+            except Exception:
+                transition_result = {}
+
+            # Attach transition fields
+            enriched["transition_action"]           = transition_result.get("recommended_action","HOLD_CURRENT_HARVEST")
+            enriched["transition_net_credit"]       = transition_result.get("transition_net_credit",0.0)
+            enriched["transition_future_roll_score"]= transition_result.get("future_roll_score",0.0)
+            enriched["transition_structure_score"]  = transition_result.get("composite_score",0.0)
+            enriched["transition_side_edge"]        = transition_result.get("side_edge")
+            enriched["transition_is_credit_approved"]= transition_result.get("approved",False)
+            enriched["transition_summary"]          = transition_result.get("transition_summary","")
+            enriched["transition_why"]              = transition_result.get("why",[])
+            enriched["transition_new_structure_type"]= (transition_result.get("new_structure") or {}).get("type","")
+            enriched["transition_new_long_leg"]     = (transition_result.get("new_structure") or {}).get("long_leg")
+            enriched["transition_new_short_leg"]    = (transition_result.get("new_structure") or {}).get("short_leg")
+            enriched["transition_rejected_candidates"]= transition_result.get("rejected_candidates",[])
+
             enriched.update({
                 "net_liq":                  harvest["net_liq"],
                 "harvestable_equity":       harvest["harvestable_equity"],
