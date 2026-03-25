@@ -51,6 +51,17 @@ def _score_bar(score: float, label: str = "") -> None:
     )
 
 
+def _score_bar(score: float, label: str = "") -> None:
+    color = "#22c55e" if score >= 70 else "#f59e0b" if score >= 50 else "#ef4444"
+    import streamlit as _st2
+    _st2.markdown(
+        f'<div style="display:flex;align-items:center;gap:8px;margin:2px 0">'
+        f'<span style="font-size:11px;color:#9ca3af;width:130px">{label}</span>'
+        f'<div style="flex:1;background:#1f2937;border-radius:4px;height:8px">'
+        f'<div style="width:{min(score,100):.0f}%;background:{color};height:8px;border-radius:4px"></div>'
+        f'</div><span style="font-size:11px;color:#e5e7eb;width:35px">{score:.0f}</span></div>',
+        unsafe_allow_html=True)
+
 def render_transition_preview(position_row: dict[str, Any]) -> None:
     """Full transition preview panel — sections A through D."""
     action  = str(position_row.get("transition_action","HOLD_CURRENT_HARVEST"))
@@ -131,12 +142,80 @@ def render_transition_preview(position_row: dict[str, Any]) -> None:
         st.info(f"📐 Skew edge: **{side_edge}** side currently richer — "
                 f"flip harvests premium from the richer IV surface.")
 
+    # ── E. Campaign economics ────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**E — Campaign Economics**")
+    e1,e2,e3,e4 = st.columns(4)
+    e1.metric("Basis Before",   f'${_sf(position_row.get("transition_campaign_net_basis_before")):.2f}')
+    e2.metric("Basis After",    f'${_sf(position_row.get("transition_campaign_net_basis_after")):.2f}',
+              delta=f'-${_sf(position_row.get("transition_basis_reduction")):.2f}' if _sf(position_row.get("transition_basis_reduction"))>0 else None)
+    e3.metric("Recovered %",    f'{_sf(position_row.get("transition_recovered_pct_after")):.1f}%')
+    e4.metric("Campaign Score", f'{_sf(position_row.get("transition_campaign_improvement_score")):.0f}')
+
+    # ── F. Path robustness ────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**F — Path Robustness**")
+    f1,f2,f3 = st.columns(3)
+    avg_p  = _sf(position_row.get("transition_avg_path_score"))
+    wst_p  = _sf(position_row.get("transition_worst_path_score"))
+    bst_p  = _sf(position_row.get("transition_best_path_score"))
+    robust = bool(position_row.get("transition_path_robust"))
+    f1.metric("Avg Path Score",   f"{avg_p:.0f}")
+    f2.metric("Worst Path Score", f"{wst_p:.0f}")
+    f3.metric("Best Path Score",  f"{bst_p:.0f}")
+    st.caption(f"{'✅ Robust across tested paths' if robust else '⚠️ Path fragility detected'}")
+    if avg_p>=70 and wst_p>=50: st.info("Transition holds up well across flat, favorable, and adverse paths.")
+    elif wst_p<45: st.warning("Fragile under adverse scenario — confirm before executing.")
+    if bst_p-wst_p>30: st.caption("⚠️ High spread between best/worst path — scenario-concentrated.")
+
+    sc = position_row.get("transition_scenario_results",[])
+    if sc:
+        with st.expander(f"Scenario table ({len(sc)} paths)"):
+            import pandas as pd
+            st.dataframe(pd.DataFrame([{
+                "Scenario":    r["label"], "Spot":r["spot_scenario"],
+                "Decay":       f'{r["short_decay_score"]:.0f}',
+                "Rollability": f'{r["rollability_score"]:.0f}',
+                "Assign Risk": f'{r["assignment_risk_score"]:.0f}',
+                "Resilience":  f'{r["resilience_score"]:.0f}',
+                "Path Score":  f'{r["path_score"]:.0f}',
+            } for r in sc]), use_container_width=True, hide_index=True)
+
+    # ── G. Rebuild decision ───────────────────────────────────────────────────
+    rb_class = str(position_row.get("transition_rebuild_class","KEEP_LONG"))
+    if rb_class == "REPLACE_LONG":
+        st.divider()
+        st.markdown("**G — Rebuild Decision: REPLACE LONG**")
+        st.caption("The optimizer found a materially better long leg. Both legs will change.")
+        old_long = position_row.get("long_leg") or {}
+        new_long = position_row.get("transition_new_long_leg") or {}
+        if old_long or new_long:
+            g1,g2 = st.columns(2)
+            g1.metric("Old Long", f'${_sf(old_long.get("strike")):.0f} '
+                       f'{str(old_long.get("expiry") or old_long.get("expiration",""))[:10]}')
+            g2.metric("New Long", f'${_sf(new_long.get("strike")):.0f} '
+                       f'{str(new_long.get("expiry") or new_long.get("expiration",""))[:10]}')
+        tw = _sf(position_row.get("transition_target_width"))
+        if tw: st.caption(f"Target width: ${tw:.1f}")
+
+    # ── H. Portfolio fit ──────────────────────────────────────────────────────
+    alloc = _sf(position_row.get("transition_allocator_score",75.0))
+    rec   = _sf(position_row.get("transition_recycling_score"))
+    fit   = bool(position_row.get("transition_portfolio_fit_ok",True))
+    st.divider()
+    st.markdown("**H — Portfolio Fit**")
+    h1,h2,h3 = st.columns(3)
+    h1.metric("Allocator Score", f"{alloc:.0f}")
+    h2.metric("Recycling Score", f"{rec:.0f}")
+    h3.metric("Fit OK", "✅" if fit else "❌")
+
     # Risk notes
     rejected = position_row.get("transition_rejected_candidates") or []
     if rejected:
         with st.expander(f"Rejected candidates ({len(rejected)})"):
             for r in rejected:
-                st.caption(f"✗ {r.get('action','?')} — {r.get('reason','')}")
+                st.caption(f"✗ {r.get('action','?')} — {r.get('reason','')} "
+                            f"{'| score '+str(round(r.get('composite_score',r.get('score',0)),1)) if r.get('composite_score') or r.get('score') else ''}")
 
 
 def render_transition_orders(

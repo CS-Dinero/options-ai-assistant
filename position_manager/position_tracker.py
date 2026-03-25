@@ -485,6 +485,21 @@ class PositionTracker:
                 transition_result = {}
 
             # Attach transition fields
+            # Initialize campaign memory for this position
+            if not enriched.get("campaign_memory"):
+                try:
+                    from position_manager.campaign_memory import (
+                        initialize_campaign_memory, compute_campaign_net_basis, compute_recovered_pct)
+                    cm = initialize_campaign_memory(enriched)
+                    enriched["campaign_memory"]          = cm
+                    enriched["campaign_net_basis"]       = compute_campaign_net_basis(cm)
+                    enriched["campaign_recovered_pct"]   = compute_recovered_pct(cm)
+                    enriched["campaign_harvest_cycles"]  = 0
+                    enriched["campaign_flip_count"]      = 0
+                    enriched["campaign_rebuild_count"]   = 0
+                except Exception:
+                    pass
+
             enriched["transition_action"]           = transition_result.get("recommended_action","HOLD_CURRENT_HARVEST")
             enriched["transition_net_credit"]       = transition_result.get("transition_net_credit",0.0)
             enriched["transition_future_roll_score"]= transition_result.get("future_roll_score",0.0)
@@ -497,6 +512,29 @@ class PositionTracker:
             enriched["transition_new_long_leg"]     = (transition_result.get("new_structure") or {}).get("long_leg")
             enriched["transition_new_short_leg"]    = (transition_result.get("new_structure") or {}).get("short_leg")
             enriched["transition_rejected_candidates"]= transition_result.get("rejected_candidates",[])
+            # Rebuild class + campaign + path fields
+            enriched["transition_rebuild_class"]       = transition_result.get("rebuild_class","KEEP_LONG")
+            enriched["transition_new_long_leg"]        = (transition_result.get("new_structure") or {}).get("long_leg")
+            enriched["transition_new_short_leg"]       = (transition_result.get("new_structure") or {}).get("short_leg")
+            enriched["transition_target_width"]        = (transition_result.get("new_structure") or {}).get("target_width")
+            enriched["transition_campaign_net_basis_before"] = transition_result.get("campaign_net_basis_before",0.0)
+            enriched["transition_campaign_net_basis_after"]  = transition_result.get("campaign_net_basis_after",0.0)
+            enriched["transition_basis_reduction"]     = transition_result.get("basis_reduction",0.0)
+            enriched["transition_recovered_pct_before"]= transition_result.get("recovered_pct_before",0.0)
+            enriched["transition_recovered_pct_after"] = transition_result.get("recovered_pct_after",0.0)
+            enriched["transition_campaign_improvement_score"] = transition_result.get("campaign_improvement_score",0.0)
+            enriched["transition_improves_campaign"]   = transition_result.get("transition_improves_campaign",False)
+            enriched["transition_avg_path_score"]      = transition_result.get("avg_path_score",0.0)
+            enriched["transition_worst_path_score"]    = transition_result.get("worst_path_score",0.0)
+            enriched["transition_best_path_score"]     = transition_result.get("best_path_score",0.0)
+            enriched["transition_path_robust"]         = transition_result.get("path_robust",False)
+            enriched["transition_scenario_results"]    = transition_result.get("scenario_results",[])
+            enriched["transition_composite_score_pre_bias"] = transition_result.get("composite_score_pre_bias",0.0)
+            enriched["transition_empirical_bias_total"]= transition_result.get("empirical_bias_total",0.0)
+            # Portfolio fit (requires full portfolio_state — default to OK until portfolio layer runs)
+            enriched.setdefault("transition_portfolio_fit_ok", True)
+            enriched.setdefault("transition_allocator_score", 75.0)
+            enriched.setdefault("transition_recycling_score", transition_result.get("basis_reduction",0.0)*20)
 
             enriched.update({
                 "net_liq":                  harvest["net_liq"],

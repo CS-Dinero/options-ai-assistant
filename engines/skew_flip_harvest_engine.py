@@ -405,11 +405,49 @@ def evaluate_skew_flip_transition(
     ctx = {**market_context, "spot": spot}
     skew_metrics = compute_side_skew_metrics(chain_bundle, spot, ctx)
 
-    # Build candidates from all three families
+    # Build candidates — diagonals use rebuild decision engine, verticals use width optimizer
     candidates: list[dict] = []
-    candidates.extend(_build_same_side_diagonals(current_position, chain_bundle, spot, max_ba_pct))
-    candidates.extend(_build_opposite_side_diagonals(current_position, chain_bundle, spot, skew_metrics, max_ba_pct))
-    candidates.extend(_build_credit_spread_conversions(current_position, chain_bundle, spot, max_ba_pct))
+
+    # Same-side diagonals with optional long replacement
+    try:
+        from engines.long_replacement_optimizer import search_replacement_longs
+        from engines.rebuild_decision_engine import compare_keep_vs_replace
+        same_keep = _build_same_side_diagonals(current_position, chain_bundle, spot, max_ba_pct)
+        mctx_s = {**market_context, "spot": spot}
+        for kc in same_keep:
+            kc["rebuild_class"] = "KEEP_LONG"
+            repl_longs = search_replacement_longs(current_position, chain_bundle, mctx_s,
+                str(kc.get("short_leg",{}).get("option_type","call")), max_ba_pct, "DIAGONAL", 3)
+            best = kc
+            for rl in repl_longs:
+                rc = dict(kc); rc["long_leg"] = rl["contract"]
+                from engines.skew_flip_harvest_engine import _transition_net_credit_same_long
+                rc["transition_net_credit"] = _transition_net_credit_same_long(
+                    current_position.get("short_leg",{}), kc.get("short_leg",{}))
+                rc["search_rank_score"] = round(kc.get("search_rank_score",0)*0.70 + rl["replacement_long_score"]*0.30, 2)
+                rc["rebuild_class"] = "REPLACE_LONG"
+                decision = compare_keep_vs_replace(best, rc, mctx_s)
+                best = dict(decision["chosen_candidate"])
+                best["rebuild_class"] = decision["chosen_rebuild_class"]
+                best["decision_notes"] = decision.get("decision_notes",[])
+            candidates.append(best)
+    except Exception:
+        candidates.extend(_build_same_side_diagonals(current_position, chain_bundle, spot, max_ba_pct))
+
+    # Opposite-side diagonals
+    opp = _build_opposite_side_diagonals(current_position, chain_bundle, spot, skew_metrics, max_ba_pct)
+    for oc in opp:
+        oc.setdefault("rebuild_class","KEEP_LONG")
+    candidates.extend(opp)
+
+    # Credit spreads via vertical width optimizer
+    try:
+        from engines.vertical_width_optimizer import search_vertical_width_candidates
+        vw_cands = search_vertical_width_candidates(current_position, chain_bundle, {**market_context,"spot":spot},
+                                                     max_ba_pct, min_credit, top_n=5)
+        candidates.extend(vw_cands)
+    except Exception:
+        candidates.extend(_build_credit_spread_conversions(current_position, chain_bundle, spot, max_ba_pct))
     candidates.append({   # always include HOLD
         "action": "HOLD_CURRENT_HARVEST",
         "type":   current_position.get("structure_type","calendar"),
@@ -441,6 +479,43 @@ def evaluate_skew_flip_transition(
         # Rollability
         rollability = evaluate_future_rollability(cand, chain_bundle, ctx)
 
+        # Campaign economics
+        campaign_memory = current_position.get("campaign_memory",{})
+        if not campaign_memory:
+            try:
+                from position_manager.campaign_memory import initialize_campaign_memory
+                campaign_memory = initialize_campaign_memory(current_position)
+            except Exception:
+                campaign_memory = {"original_entry_cost": abs(float(current_position.get("entry_price",0.85) or 0.85)),
+                                   "cumulative_realized_credit":0.0,"cumulative_realized_debit":0.0,"cumulative_fees":0.0}
+        camp_eval = {}
+        if action != "HOLD_CURRENT_HARVEST":
+            try:
+                from engines.campaign_economics_engine import evaluate_campaign_economics
+                merged_for_camp = {**cand, **rollability}
+                camp_eval = evaluate_campaign_economics(current_position, campaign_memory, merged_for_camp, ctx)
+                if not camp_eval.get("transition_improves_campaign",False):
+                    rejected_list.append({"action":action,"reason":"Campaign economics gate","score":camp_eval.get("campaign_improvement_score",0)})
+                    continue
+            except Exception:
+                camp_eval = {}
+
+        # Path robustness
+        path_eval = {}
+        if action != "HOLD_CURRENT_HARVEST":
+            try:
+                from engines.path_scenario_engine import generate_path_scenarios
+                from engines.path_expectancy_scorer import score_candidate_across_paths
+                cand_for_path = {**cand, **rollability}
+                scenarios = generate_path_scenarios(current_position, cand_for_path, ctx)
+                path_eval = score_candidate_across_paths(current_position, cand_for_path, campaign_memory, scenarios)
+                if not path_eval.get("path_robust", False):
+                    rejected_list.append({"action":action,"reason":"Path robustness gate",
+                                          "avg":path_eval.get("avg_path_score",0),"worst":path_eval.get("worst_path_score",0)})
+                    continue
+            except Exception:
+                path_eval = {}
+
         # Score
         scored = score_transition(
             current_position=current_position,
@@ -450,7 +525,15 @@ def evaluate_skew_flip_transition(
             liquidity={"liquidity_score": cand.get("liquidity_score", 70.0)},
             rules=sym_rule,
         )
-        merged = {**cand, **rollability, **scored}
+        merged = {**cand, **rollability, **camp_eval, **path_eval, **scored}
+
+        # Apply empirical bias (after gates — biases only affect ranking)
+        try:
+            from engines.empirical_weight_adjuster import apply_empirical_bias
+            emp_adj = current_position.get("_empirical_adjustments",{})
+            if emp_adj: merged = apply_empirical_bias(merged, symbol, emp_adj)
+        except Exception:
+            pass
 
         if merged.get("approved") or action == "HOLD_CURRENT_HARVEST":
             approved_list.append(merged)
@@ -485,23 +568,44 @@ def evaluate_skew_flip_transition(
 
     is_real = best.get("action","") != "HOLD_CURRENT_HARVEST"
 
+    dec_notes = best.get("decision_notes",[])
     return {
-        "approved": is_real,
-        "recommended_action": best["action"],
+        "approved":              is_real,
+        "recommended_action":    best["action"],
+        "rebuild_class":         best.get("rebuild_class","KEEP_LONG"),
         "transition_net_credit": round(best.get("transition_net_credit",0.0), 4),
-        "future_roll_score": round(best.get("future_roll_score",0.0), 2),
-        "composite_score": round(best.get("composite_score",0.0), 2),
+        "future_roll_score":     round(best.get("future_roll_score",0.0), 2),
+        "composite_score":       round(best.get("composite_score",0.0), 2),
+        "composite_score_pre_bias": round(best.get("composite_score_pre_bias", best.get("composite_score",0.0)), 2),
+        "empirical_bias_total":  round(best.get("empirical_bias_total",0.0), 2),
+        # Campaign fields
+        "campaign_net_basis_before":     best.get("campaign_net_basis_before",0.0),
+        "campaign_net_basis_after":      best.get("campaign_net_basis_after",0.0),
+        "basis_reduction":               best.get("basis_reduction",0.0),
+        "recovered_pct_before":          best.get("recovered_pct_before",0.0),
+        "recovered_pct_after":           best.get("recovered_pct_after",0.0),
+        "campaign_improvement_score":    best.get("campaign_improvement_score",0.0),
+        "transition_improves_campaign":  best.get("transition_improves_campaign",False),
+        # Path fields
+        "avg_path_score":      best.get("avg_path_score",0.0),
+        "worst_path_score":    best.get("worst_path_score",0.0),
+        "best_path_score":     best.get("best_path_score",0.0),
+        "path_robust":         best.get("path_robust",False),
+        "scenario_results":    best.get("scenario_results",[]),
         "new_structure": {
-            "type":      best.get("type",""),
-            "long_leg":  best.get("long_leg"),
-            "short_leg": best.get("short_leg"),
+            "type":         best.get("type",""),
+            "long_leg":     best.get("long_leg"),
+            "short_leg":    best.get("short_leg"),
+            "target_width": best.get("target_width"),
         },
-        "why": why,
-        "rejected_candidates": rejected_list,
-        "all_scored": approved_list,
-        "side_edge": skew_metrics.get("preferred_flip_side"),
+        "why":               why + dec_notes,
+        "rejected_candidates":rejected_list,
+        "all_scored":         approved_list,
+        "side_edge":          skew_metrics.get("preferred_flip_side"),
         "transition_summary": (
-            f"{best['action']} | credit ${best['transition_net_credit']:.2f} "
-            f"| roll score {best.get('future_roll_score',0):.1f}"
+            f"{best['action']} | {best.get('rebuild_class','KEEP_LONG')} | "
+            f"credit ${best.get('transition_net_credit',0):.2f} | "
+            f"roll {best.get('future_roll_score',0):.1f} | "
+            f"path {best.get('avg_path_score',0):.0f}"
         ),
     }
