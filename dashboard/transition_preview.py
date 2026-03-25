@@ -198,6 +198,36 @@ def render_transition_preview(position_row: dict[str, Any]) -> None:
         tw = _sf(position_row.get("transition_target_width"))
         if tw: st.caption(f"Target width: ${tw:.1f}")
 
+    # ── L. Playbook & SOP ────────────────────────────────────────────────────
+    pb_code = str(position_row.get("playbook_code","—"))
+    pb_name = str(position_row.get("playbook_name","—"))
+    pb_status=str(position_row.get("playbook_status","WATCHLIST"))
+    STATUS_COLORS={"PROMOTED":"#15803d","WATCHLIST":"#2563eb","LIMITED_USE":"#b45309","DEMOTED":"#dc2626"}
+    sc=STATUS_COLORS.get(pb_status,"#6b7280")
+    st.divider()
+    st.markdown(
+        f'<div style="padding:8px 14px;border-radius:8px;border-left:4px solid {sc};background:#0f1117">'
+        f'<strong style="color:{sc}">{pb_code}</strong> — {pb_name} &nbsp;|&nbsp; '
+        f'<span style="color:{sc}">{pb_status}</span></div>', unsafe_allow_html=True)
+
+    l1,l2,l3=st.columns(3)
+    l1.metric("Contract Add",  f'+{int(_sf(position_row.get("transition_final_contract_add",0)))}')
+    l2.metric("Capital Decision", str(position_row.get("capital_commitment_decision","NO_ADD")))
+    l3.metric("Queue Bias",    f'{_sf(position_row.get("playbook_queue_bias")):+.1f}')
+
+    sop_sections = [
+        ("Setup",       position_row.get("sop_setup",[])),
+        ("Execution",   position_row.get("sop_execution",[])),
+        ("Invalidation",position_row.get("sop_invalidation",[])),
+        ("Next Step",   position_row.get("sop_next_step",[])),
+    ]
+    for label, steps in sop_sections:
+        if steps:
+            with st.expander(f"SOP: {label}"):
+                for s in steps: st.caption(f"• {s}")
+    audit_tags = position_row.get("playbook_audit_tags",[])
+    if audit_tags: st.caption("Tags: " + " · ".join(audit_tags))
+
     # ── I. Timing & execution plan ───────────────────────────────────────────
     st.divider()
     st.markdown("**I — Timing & Execution Plan**")

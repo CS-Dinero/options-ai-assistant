@@ -533,6 +533,44 @@ class PositionTracker:
             except Exception:
                 pass
 
+            # Playbook matching + SOP + audit tags
+            try:
+                from playbooks.playbook_matcher import build_playbook_match
+                from playbooks.sop_renderer import render_playbook_sop
+                from playbooks.playbook_audit_tags import build_playbook_audit_tags
+                pb = build_playbook_match(enriched)
+                enriched.update(pb)
+                sop = render_playbook_sop(enriched)
+                enriched["sop_setup"]        = sop.get("sop_setup",[])
+                enriched["sop_execution"]    = sop.get("sop_execution",[])
+                enriched["sop_invalidation"] = sop.get("sop_invalidation",[])
+                enriched["sop_next_step"]    = sop.get("sop_next_step",[])
+                enriched["playbook_audit_tags"] = build_playbook_audit_tags(enriched)
+            except Exception: pass
+
+            # Capital rotation (requires playbook_code to exist first)
+            try:
+                from portfolio.capital_rotation_engine import evaluate_capital_rotation
+                rot = evaluate_capital_rotation(enriched_rows_so_far, enriched)
+                enriched["playbook_status"]              = rot.get("effective_status","WATCHLIST")
+                enriched["playbook_size_multiplier"]     = rot.get("size_multiplier",1.0)
+                enriched["playbook_quality_multiplier"]  = rot.get("quality_multiplier",1.0)
+                enriched["transition_final_contract_add"]= rot.get("final_contract_add",0)
+                enriched["active_symbol_count"]          = rot.get("active_symbol_count",0)
+                enriched["active_playbook_count"]        = rot.get("active_playbook_count",0)
+                enriched["symbol_concurrency_ok"]        = rot.get("symbol_concurrency_ok",True)
+                enriched["playbook_concurrency_ok"]      = rot.get("playbook_concurrency_ok",True)
+                enriched["capital_commitment_decision"]  = rot.get("capital_commitment_decision","NO_ADD")
+                enriched["capital_commitment_ok"]        = rot.get("capital_commitment_ok",False)
+                # Playbook queue bias (from governed registry if available)
+                enriched.setdefault("playbook_queue_bias", 0.0)
+            except Exception:
+                enriched.setdefault("playbook_status","WATCHLIST")
+                enriched.setdefault("playbook_queue_bias",0.0)
+                enriched.setdefault("capital_commitment_decision","NO_ADD")
+                enriched.setdefault("capital_commitment_ok",False)
+                enriched.setdefault("transition_final_contract_add",0)
+
             # Rebuild class + campaign + path fields
             enriched["transition_rebuild_class"]       = transition_result.get("rebuild_class","KEEP_LONG")
             enriched["transition_new_long_leg"]        = (transition_result.get("new_structure") or {}).get("long_leg")
@@ -576,6 +614,7 @@ class PositionTracker:
             enriched.setdefault("transition_allocator_score", 75.0)
             enriched.setdefault("transition_recycling_score", transition_result.get("basis_reduction",0.0)*20)
 
+            enriched_rows_so_far = []  # will be empty on first pass; populated after loop
             enriched.update({
                 "net_liq":                  harvest["net_liq"],
                 "harvestable_equity":       harvest["harvestable_equity"],

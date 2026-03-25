@@ -791,9 +791,13 @@ def main():
 
     with optimizer_tab:
         _render_optimizer_panel()
+        st.divider()
+        _render_research_panel()
 
     with governance_tab:
         _render_governance_panel()
+        st.divider()
+        _render_policy_lab([], [])
 
     with system_tab:
         _render_system_panel()
@@ -2919,6 +2923,45 @@ def _render_close_trade_form(trade: dict, logger) -> None:
             st.rerun()
         else:
             st.error("Close failed — trade ID not found in log.")
+
+
+# ─────────────────────────────────────────────
+# POLICY LAB + RESEARCH PANELS
+# ─────────────────────────────────────────────
+
+def _render_policy_lab(enriched_rows, transition_queue):
+    """Render what-if policy simulation panel."""
+    try:
+        from policy.policy_scenario_registry import POLICY_SCENARIOS
+        from policy.policy_simulator import simulate_policy_scenario
+        from policy.policy_diff_engine import build_policy_diff
+        from policy.policy_report_renderer import render_policy_report
+        st.markdown("### 🧪 Policy Lab")
+        key = st.selectbox("Scenario", list(POLICY_SCENARIOS.keys()),
+                           format_func=lambda k: POLICY_SCENARIOS[k]["name"], key="pl_sel")
+        if st.button("▶ Run", key="pl_run"):
+            with st.spinner("Simulating..."):
+                bundle = {"playbook_policy_registry":{},"playbook_capital_policy":{},
+                          "symbol_concurrency_overrides":{},"execution_policy_overrides":{},
+                          "surface_threshold_override":65.0}
+                sim = simulate_policy_scenario(enriched_rows, bundle, POLICY_SCENARIOS[key]["overrides"])
+                diff= build_policy_diff(transition_queue, sim["simulated_queue"],
+                                         enriched_rows, sim["simulated_rows"])
+                render_policy_report(POLICY_SCENARIOS[key]["name"], diff)
+    except Exception as e:
+        st.warning(f"Policy lab error: {e}")
+
+
+def _render_research_panel():
+    """Render playbook research report."""
+    try:
+        from research.playbook_backtest_engine import run_playbook_backtest
+        from research.playbook_report_renderer import render_playbook_report
+        journals = st.session_state.get("transition_journals", [])
+        pkg = run_playbook_backtest(journals)
+        render_playbook_report(pkg)
+    except Exception as e:
+        st.info(f"Log transitions to populate research. ({e})")
 
 
 if __name__ == "__main__":
