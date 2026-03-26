@@ -2490,6 +2490,30 @@ def _render_harvest_view(snapshot: dict, market: dict, derived: dict) -> None:
     for pos in sorted_pos:
         _render_harvest_row(pos, market, derived)
 
+    # ── Export Signals CSV ────────────────────────────────────────────────────
+    if all_positions:
+        import pandas as pd
+        EXPORT_COLS = [
+            "symbol", "strategy_type", "bot_priority",
+            "transition_action", "transition_net_credit",
+            "transition_execution_policy", "transition_execution_schedule",
+            "transition_future_roll_score", "transition_avg_path_score",
+            "campaign_net_basis", "campaign_recovered_pct",
+            "playbook_code", "playbook_name",
+            "capital_commitment_decision", "transition_final_contract_add",
+            "queue_one_liner", "transition_desk_note",
+            "sop_execution",
+        ]
+        _df = pd.DataFrame(all_positions)
+        export_cols = [c for c in EXPORT_COLS if c in _df.columns]
+        export_df = _df[export_cols] if export_cols else _df
+        st.download_button(
+            label="📥 Export Signals CSV",
+            data=export_df.to_csv(index=False),
+            file_name="signals_export.csv",
+            mime="text/csv",
+        )
+
 
 # ─────────────────────────────────────────────
 # PORTFOLIO HARVEST PANEL (v26)
