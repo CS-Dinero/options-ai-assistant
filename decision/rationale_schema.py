@@ -1,0 +1,12 @@
+"""decision/rationale_schema.py — Structured human reasoning fields."""
+RATIONALE_SCHEMA: dict = {
+    "confidence_levels":["LOW","MEDIUM","HIGH"],
+    "agreement_modes":["AGREE","PARTIAL_AGREE","OVERRIDE"],
+    "reason_codes":[
+        "BETTER_MARKET_CONTEXT","SURFACE_NOT_TRUSTED","TIMING_NOT_TRUSTED",
+        "QUEUE_TOO_AGGRESSIVE","POLICY_TOO_STRICT","POLICY_TOO_LOOSE",
+        "PLAYBOOK_EVIDENCE_INSUFFICIENT","SLIPPAGE_RISK_TOO_HIGH",
+        "PORTFOLIO_CONCENTRATION_CONCERN","CAPITAL_PRESERVATION",
+        "MANUAL_DISCRETION","WORKFLOW_SAFETY","APPROVAL_CONFIDENCE_HIGH",
+    ],
+}

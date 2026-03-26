@@ -812,6 +812,10 @@ def main():
         _render_live_data_panel()
 
 
+if __name__ == "__main__":
+    main()
+
+
 # ─────────────────────────────────────────────
 # TRADE LOG PANEL
 # ─────────────────────────────────────────────
@@ -3116,7 +3120,3 @@ def _render_trends_panel(snapshot_store):
             render_trend_block("Delay Rate",  compute_metric_trend(exec_snaps,"delay_rate"))
     except Exception as e:
         import streamlit as st; st.warning(f"Trends error: {e}")
-
-
-if __name__ == "__main__":
-    main()
