@@ -34,7 +34,7 @@ class MassiveProvider(MarketDataProvider):
                 extract_atm_straddle, extract_front_iv, extract_skew_25d,
                 _compute_dte,
             )
-            sym       = symbol.upper()
+            sym = symbol.upper()
             expirations = get_expirations(sym)
             short_exp = pick_short_expiration(expirations)
             long_exp  = pick_long_expiration(expirations)
@@ -42,50 +42,44 @@ class MassiveProvider(MarketDataProvider):
             chain     = get_option_chain(sym, short_exp)
 
             short_dte = _compute_dte(short_exp)
-            long_dte  = _compute_dte(long_exp)
 
-            # IV + skew first so they're available for ATR fallback
-            front_iv     = extract_front_iv(chain, short_dte)
-            back_iv      = extract_front_iv(chain, long_dte)
-            skew         = extract_skew_25d(chain, short_dte)
-            put_25d_iv   = skew.get("put_25d_iv")
-            call_25d_iv  = skew.get("call_25d_iv")
+            atm_call_mid, atm_put_mid = extract_atm_straddle(chain, spot, short_dte)
+            front_iv, back_iv         = extract_front_iv(chain, short_dte)
+            put_25d_iv, call_25d_iv   = extract_skew_25d(chain, short_dte)
 
-            straddle     = extract_atm_straddle(chain, spot, short_dte)
-            atm_call_mid = straddle.get("atm_call_mid", 0.0)
-            atm_put_mid  = straddle.get("atm_put_mid", 0.0)
-
-            # Guard against None IV values — engine arithmetic will crash without floats
-            _default_iv  = 0.16
-            front_iv     = float(front_iv)    if front_iv    is not None else _default_iv
-            back_iv      = float(back_iv)     if back_iv     is not None else _default_iv * 1.05
-            put_25d_iv   = float(put_25d_iv)  if put_25d_iv  is not None else _default_iv * 1.15
-            call_25d_iv  = float(call_25d_iv) if call_25d_iv is not None else _default_iv * 0.95
-
-            # ATR: try live endpoint, fall back to IV-derived estimate
             try:
                 from data_sources.massive_api import get_atr_14
                 atr_14, atr_prior = get_atr_14(sym)
             except (ImportError, Exception):
+                # get_atr_14 requires /v2/aggs candles endpoint — not always available.
+                # Estimate from IV: ATR ≈ spot * IV / sqrt(252) * realized_vol_factor
+                # Factor 0.70 approximates the realized/implied vol ratio empirically.
                 import math as _math
-                _iv   = float(front_iv or 0.18)
-                _atr  = round(spot * _iv / _math.sqrt(252) * 0.70, 2)
+                _iv  = float(front_iv or 0.18)
+                _atr = round(spot * _iv / _math.sqrt(252) * 0.70, 2)
                 atr_14, atr_prior = _atr, round(_atr * 1.05, 2)
 
+            # Guard against None IV values — engine arithmetic will crash without floats
+            _default_iv = 0.16
+            front_iv    = float(front_iv)    if front_iv    is not None else _default_iv
+            back_iv     = float(back_iv)     if back_iv     is not None else _default_iv * 1.05
+            put_25d_iv  = float(put_25d_iv)  if put_25d_iv  is not None else _default_iv * 1.15
+            call_25d_iv = float(call_25d_iv) if call_25d_iv is not None else _default_iv * 0.95
+
             return {
-                "symbol":               sym,
-                "spot_price":           spot,
-                "short_dte_target":     short_dte,
-                "long_dte_target":      long_dte,
-                "atm_call_mid":         atm_call_mid,
-                "atm_put_mid":          atm_put_mid,
-                "front_iv":             front_iv,
-                "back_iv":              back_iv,
-                "put_25d_iv":           put_25d_iv,
-                "call_25d_iv":          call_25d_iv,
-                "iv_percentile":        50.0,   # not available from Massive directly
-                "atr_14":               atr_14,
-                "atr_prior":            atr_prior,
+                "symbol":            sym,
+                "spot_price":        spot,
+                "short_dte_target":  _compute_dte(short_exp),
+                "long_dte_target":   _compute_dte(long_exp),
+                "atm_call_mid":      atm_call_mid,
+                "atm_put_mid":       atm_put_mid,
+                "front_iv":          front_iv,
+                "back_iv":           back_iv,
+                "put_25d_iv":        put_25d_iv,
+                "call_25d_iv":       call_25d_iv,
+                "iv_percentile":     50.0,   # not available from Massive directly
+                "atr_14":            atr_14,
+                "atr_prior":         atr_prior,
                 # Strategy config defaults
                 "default_spread_width": 5,
                 "front_dte":            short_dte,

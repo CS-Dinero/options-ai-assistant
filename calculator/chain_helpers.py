@@ -71,8 +71,6 @@ def first_strike_outside_em_with_delta(
 
     # Primary: satisfy delta filter
     for row in candidates:
-        if row["delta"] is None:
-            continue
         abs_delta = abs(row["delta"])
         if delta_min <= abs_delta <= delta_max:
             return row

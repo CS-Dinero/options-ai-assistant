@@ -20,9 +20,6 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
-load_dotenv(ROOT / ".env")
-
 import streamlit as st
 try:
     import plotly
@@ -36,6 +33,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Operator console link in sidebar
+with st.sidebar:
+    st.caption("⚙️ [Operator Console](operator_dashboard_app.py)")
+    st.divider()
 
 # ── Imports after path setup ──────────────────────────────────────────────────
 from data.mock_data import load_mock_market, build_mock_chain
@@ -274,8 +276,6 @@ def render_sidebar() -> tuple[str, str]:
             st.cache_data.clear()
             st.rerun()
 
-        st.divider()
-        st.caption("⚙️ [Operator Console](operator_dashboard_app.py)")
         st.divider()
         st.markdown(
             '<p style="font-size:11px;color:#6b7280">Data cached 5 min.<br>'
@@ -685,43 +685,53 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, governance_tab, system_tab, live_tab = st.tabs([
-        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest", "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data"
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab = st.tabs([
+        "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest",
+        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data"
     ])
 
     with pos_tab:
         # Harvest view (v26) — shows badge, net liq, roll credit, flip rec, analyst + ticket
         import os as _os
         from pathlib import Path as _Path
+        from backtest.trade_logger import TradeLogger as _TradeLogger
         if _os.path.exists("/mount/src"):
             _log_path    = _Path("/tmp/options_ai_logs/trade_log.csv")
             _manual_path = _Path("/tmp/options_ai_logs/open_positions.csv")
+            _log_dir     = _Path("/tmp/options_ai_logs")
         else:
             _log_path    = _Path("logs/trade_log.csv")
             _manual_path = _Path("data/positions/open_positions.csv")
-        _tracker  = PositionTracker(trade_log_path=_log_path, manual_csv_path=_manual_path)
-        _snapshot = _tracker.snapshot(derived=derived, spot=market.get("spot_price", 0))
-        # Fallback: supplement with TradeLogger open trades to survive /tmp resets
-        if _snapshot["total_open"] == 0:
-            try:
-                from backtest.trade_logger import TradeLogger as _TradeLogger
-                _tl_logger = _TradeLogger(log_dir=_log_path.parent)
-                _logger_positions = _tl_logger.get_open_trades()
+            _log_dir     = _Path(__file__).parent.parent / "logs"
+        _log_dir.mkdir(parents=True, exist_ok=True)
+        # Build tracker — supplement with logger's open trades to survive /tmp resets
+        _tracker   = PositionTracker(trade_log_path=_log_path, manual_csv_path=_manual_path)
+        _tl_logger = _TradeLogger(log_dir=_log_dir)
+        _logger_positions = _tl_logger.get_open_trades()
+        _snapshot  = _tracker.snapshot(derived=derived, spot=market.get("spot_price", 0))
+        # If PositionTracker found nothing but logger has trades, inject them
+        if _snapshot["total_open"] == 0 and _logger_positions:
+            _snapshot["_injected_positions"] = _logger_positions
+            # Re-run snapshot with injected positions as manual overrides
+            from position_manager.position_tracker import merge_positions, load_open_from_trade_log
+            _merged = merge_positions(load_open_from_trade_log(_log_path), _logger_positions)
+            _tracker2 = PositionTracker(trade_log_path=_log_path, manual_csv_path=_manual_path)
+            _snapshot = _tracker2.snapshot(derived=derived, spot=market.get("spot_price", 0))
+            if _snapshot["total_open"] == 0:
+                # Direct injection: treat logger positions as manual CSV rows
+                import tempfile as _tf, csv as _csv
+                _tmp_manual = _Path(_tf.mktemp(suffix=".csv"))
                 if _logger_positions:
-                    import tempfile as _tf, csv as _csv
-                    from pathlib import Path as _PF
-                    _tmp_manual = _PF(_tf.mktemp(suffix=".csv"))
                     _fields = list(_logger_positions[0].keys())
                     with open(_tmp_manual, "w", newline="") as _f:
                         _w = _csv.DictWriter(_f, fieldnames=_fields, extrasaction="ignore")
-                        _w.writeheader(); _w.writerows(_logger_positions)
-                    _snapshot = PositionTracker(trade_log_path=_log_path,
-                                                manual_csv_path=_tmp_manual).snapshot(
-                                                    derived=derived, spot=market.get("spot_price", 0))
-            except Exception:
-                pass
+                        _w.writeheader()
+                        _w.writerows(_logger_positions)
+                _tracker3 = PositionTracker(trade_log_path=_log_path, manual_csv_path=_tmp_manual)
+                _snapshot = _tracker3.snapshot(derived=derived, spot=market.get("spot_price", 0))
 
         # Inject current chain into position rows for live strike selector
+        # Chain is indexed by symbol so multi-symbol positions work correctly
         if _snapshot["total_open"] > 0:
             try:
                 from providers.provider_factory import build_provider as _bp
@@ -754,7 +764,8 @@ def main():
             except Exception:
                 pass
 
-        # Enrich positions with live market data (massive only — additive, silent on failure)
+        # Enrich positions with live market data for their specific symbol
+        # Only when using a live provider (not mock) to avoid stale data
         if data_mode in ("massive",) and _snapshot["total_open"] > 0:
             try:
                 from position_manager.position_enricher import enrich_snapshot_with_live_data
@@ -770,8 +781,7 @@ def main():
                     _live_prov = build_provider("massive", api_key=_api_key)
                     _snapshot  = enrich_snapshot_with_live_data(_snapshot, _live_prov)
             except Exception:
-                pass
-
+                pass  # enrichment is additive — failure is silent
         _render_harvest_view(_snapshot, market, derived)
         st.divider()
         # Full lifecycle detail below harvest summary
@@ -791,19 +801,19 @@ def main():
 
     with optimizer_tab:
         _render_optimizer_panel()
-        st.divider()
-        _render_research_panel()
 
-    with governance_tab:
+    with gov_tab:
         _render_governance_panel()
-        st.divider()
-        _render_policy_lab([], [])
 
-    with system_tab:
+    with sys_tab:
         _render_system_panel()
 
     with live_tab:
         _render_live_data_panel()
+
+
+if __name__ == "__main__":
+    main()
 
 
 # ─────────────────────────────────────────────
@@ -1000,22 +1010,13 @@ def _render_backtest_panel():
                 max_trades_per_day = int(max_per_day),
                 score_threshold    = int(score_thresh),
             )
-        except FileNotFoundError:
-            st.info(f"No historical data found for **{symbol}** — generating mock data…")
-            from backtest.generate_mock_data import generate
-            generate(num_days=30, symbol=symbol)
-            try:
-                result = run_backtest(
-                    symbols            = [symbol],
-                    start              = start_date,
-                    end                = end_date,
-                    starting_capital   = float(starting_cap),
-                    max_trades_per_day = int(max_per_day),
-                    score_threshold    = int(score_thresh),
-                )
-            except Exception as e:
-                st.error(f"Backtest error after generating data: {e}")
-                return
+        except FileNotFoundError as e:
+            st.error(
+                f"Historical data not found: `{e}`\n\n"
+                f"Run `python backtest/generate_mock_data.py` to generate mock data, "
+                f"or add real CSV files to `data/historical/`."
+            )
+            return
         except Exception as e:
             st.error(f"Backtest error: {e}")
             return
@@ -1138,6 +1139,7 @@ def _render_backtest_panel():
                 "entry_price", "exit_price", "pnl", "return_pct",
                 "exit_reason", "days_held", "vga_environment", "score",
             ]
+            df = pd.DataFrame(st_)[[c for c in display_cols if c in df.columns if c in df.columns]]
             df2 = pd.DataFrame([{c: t.get(c, "") for c in display_cols} for t in st_])
             st.dataframe(df2, use_container_width=True, hide_index=True)
 
@@ -1182,6 +1184,24 @@ def _render_positions_panel(derived: dict, market: dict) -> None:
     tracker  = PositionTracker(trade_log_path=log_path, manual_csv_path=manual_path)
     spot     = market.get("spot_price", 0)
     snapshot = tracker.snapshot(derived=derived, spot=spot)
+    # Fallback: if tracker found nothing, try reading from TradeLogger directly
+    if snapshot["total_open"] == 0:
+        try:
+            from backtest.trade_logger import TradeLogger as _TL
+            import tempfile as _tf2, csv as _csv2
+            from pathlib import Path as _P2
+            _tl2 = _TL(log_dir=log_path.parent)
+            _open2 = _tl2.get_open_trades()
+            if _open2:
+                _tmp2 = _P2(_tf2.mktemp(suffix=".csv"))
+                _fields2 = list(_open2[0].keys())
+                with open(_tmp2, "w", newline="") as _f2:
+                    _w2 = _csv2.DictWriter(_f2, fieldnames=_fields2, extrasaction="ignore")
+                    _w2.writeheader(); _w2.writerows(_open2)
+                snapshot = PositionTracker(trade_log_path=log_path,
+                                           manual_csv_path=_tmp2).snapshot(derived=derived, spot=spot)
+        except Exception:
+            pass
     summary  = snapshot["summary"]
 
     # ── Summary bar ───────────────────────────────────────────────────────────
@@ -1417,7 +1437,7 @@ def _render_analytics_panel() -> None:
 
 
 # ─────────────────────────────────────────────
-# PORTFOLIO RUNNER PANEL
+# PORTFOLIO RUNNER PANEL (for multi-symbol runs)
 # ─────────────────────────────────────────────
 
 def _render_portfolio_panel() -> None:
@@ -1511,6 +1531,15 @@ def _render_portfolio_panel() -> None:
                 f"risk=${t.get('_risk',0):.0f} | "
                 f"contracts={t.get('contracts',1)}"
             )
+
+    # ── Lifecycle signals from open cal/diag positions ───────────────────────
+    for sym_block in output.get("symbols", []):
+        eng = sym_block.get("engine_output", {})
+        lifecycle = eng.get("positions", {}).get("calendar_diagonal_lifecycle", [])
+        if lifecycle:
+            st.divider()
+            st.caption(f"📅 {sym_block['symbol']} calendar/diagonal lifecycle:")
+            _render_lifecycle_signals(eng.get("positions", {}))
 
     # Raw output expander
     with st.expander(f"Raw output — {meta['run_id']}"):
@@ -1888,7 +1917,7 @@ def _render_governance_panel() -> None:
 
 
 # ─────────────────────────────────────────────
-# SYSTEM PANEL
+# SYSTEM PANEL — health check + bootstrap + deployment packet + release manifest
 # ─────────────────────────────────────────────
 
 def _render_system_panel() -> None:
@@ -2178,12 +2207,6 @@ def _render_live_data_panel() -> None:
                 unsafe_allow_html=True,
             )
 
-        lifecycle = eng.get("positions", {}).get("calendar_diagonal_lifecycle", [])
-        if lifecycle:
-            st.divider()
-            st.caption(f"📅 {sym_block['symbol']} calendar/diagonal lifecycle:")
-            _render_lifecycle_signals(eng.get("positions", {}))
-
     # Alerts
     high_alerts = [a for a in output.get("alerts",[]) if a.get("severity") in ("HIGH","CRITICAL")]
     if high_alerts:
@@ -2281,18 +2304,19 @@ def _render_lifecycle_signals(snapshot: dict) -> None:
 
 
 # ─────────────────────────────────────────────
-# HARVEST VIEW PANELS (v26)
+# HARVEST VIEW — positions tab upgrade
 # ─────────────────────────────────────────────
 
 def _harvest_badge_html(badge: str) -> str:
     """Render a colored harvest badge pill."""
     colors = {
-        "GOLD":  ("#f59e0b", "#000"),
-        "GREEN": ("#22c55e", "#fff"),
-        "RED":   ("#ef4444", "#fff"),
-        "BLUE":  ("#3b82f6", "#fff"),
-        "WAIT":  ("#6b7280", "#fff"),
-        "—":     ("#1f2937", "#6b7280"),
+        "GOLD":   ("#f59e0b", "#000"),
+        "GREEN":  ("#22c55e", "#fff"),
+        "RED":    ("#ef4444", "#fff"),
+        "BLUE":   ("#3b82f6", "#fff"),
+        "PURPLE": ("#7c3aed", "#fff"),
+        "WAIT":   ("#6b7280", "#fff"),
+        "—":      ("#1f2937", "#6b7280"),
     }
     bg, fg = colors.get(badge, ("#1f2937", "#6b7280"))
     return (f'<span style="background:{bg};color:{fg};padding:2px 10px;'
@@ -2301,7 +2325,7 @@ def _harvest_badge_html(badge: str) -> str:
 
 
 def _render_harvest_row(pos: dict, market: dict, derived: dict) -> None:
-    """Render a single position as a Harvest view card."""
+    """Render a single position as a Harvest view card with bot action."""
     badge        = pos.get("harvest_badge", "—")
     net_liq      = pos.get("net_liq")
     harvestable  = pos.get("harvestable_equity")
@@ -2319,10 +2343,11 @@ def _render_harvest_row(pos: dict, market: dict, derived: dict) -> None:
                     or pos.get("management_status", bot_action))
 
     border_color = {
-        "GOLD":  "#f59e0b",
-        "GREEN": "#22c55e",
-        "RED":   "#ef4444",
-        "BLUE":  "#3b82f6",
+        "GOLD":   "#f59e0b",
+        "GREEN":  "#22c55e",
+        "RED":    "#ef4444",
+        "BLUE":   "#3b82f6",
+        "PURPLE": "#7c3aed",
     }.get(badge, "#374151")
 
     st.markdown(
@@ -2490,30 +2515,6 @@ def _render_harvest_view(snapshot: dict, market: dict, derived: dict) -> None:
     for pos in sorted_pos:
         _render_harvest_row(pos, market, derived)
 
-    # ── Export Signals CSV ────────────────────────────────────────────────────
-    if all_positions:
-        import pandas as pd
-        EXPORT_COLS = [
-            "symbol", "strategy_type", "bot_priority",
-            "transition_action", "transition_net_credit",
-            "transition_execution_policy", "transition_execution_schedule",
-            "transition_future_roll_score", "transition_avg_path_score",
-            "campaign_net_basis", "campaign_recovered_pct",
-            "playbook_code", "playbook_name",
-            "capital_commitment_decision", "transition_final_contract_add",
-            "queue_one_liner", "transition_desk_note",
-            "sop_execution",
-        ]
-        _df = pd.DataFrame(all_positions)
-        export_cols = [c for c in EXPORT_COLS if c in _df.columns]
-        export_df = _df[export_cols] if export_cols else _df
-        st.download_button(
-            label="📥 Export Signals CSV",
-            data=export_df.to_csv(index=False),
-            file_name="signals_export.csv",
-            mime="text/csv",
-        )
-
 
 # ─────────────────────────────────────────────
 # PORTFOLIO HARVEST PANEL (v26)
@@ -2581,6 +2582,10 @@ def _render_portfolio_harvest_panel(portfolio_output: dict) -> None:
             )
 
 
+# ─────────────────────────────────────────────
+# TRADE ENTRY FORM
+# ─────────────────────────────────────────────
+
 def _render_trade_entry_form(logger) -> None:
     """
     ➕ Enter Trade — manual position entry form.
@@ -2623,8 +2628,12 @@ def _render_trade_entry_form(logger) -> None:
 
         st.markdown("**Strikes & expirations**")
         r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-        short_strike      = r2c1.number_input("Short strike $", min_value=0.0, step=0.5, format="%.2f")
-        long_strike       = r2c2.number_input("Long strike $",  min_value=0.0, step=0.5, format="%.2f")
+        short_strike = r2c1.number_input("Short strike $", min_value=0.0, value=0.0,
+                                          step=1.0, format="%.1f",
+                                          help="e.g. 350 for TSLA $350 strike")
+        long_strike  = r2c2.number_input("Long strike $",  min_value=0.0, value=0.0,
+                                          step=1.0, format="%.1f",
+                                          help="Same as short for calendars. Different for diagonals.")
         short_expiration  = r2c3.date_input("Short expiry",  value=date.today())
         long_expiration   = r2c4.date_input("Long expiry",   value=date.today())
 
@@ -2632,8 +2641,8 @@ def _render_trade_entry_form(logger) -> None:
         r3c1, r3c2, r3c3, r3c4 = st.columns(4)
         entry_price = r3c1.number_input(
             "Entry debit / credit $",
-            min_value=-999.0, max_value=999.0, step=0.01, format="%.2f",
-            help="Debit = positive (you paid). Credit = negative (you received).",
+            min_value=-500.0, max_value=500.0, value=0.0, step=0.05, format="%.2f",
+            help="Debit = positive (you paid to open). Credit = negative (you received).",
         )
         contracts  = r3c2.number_input("Contracts", min_value=1, max_value=100, value=1, step=1)
         spot_open  = r3c3.number_input("Spot price at entry $", min_value=0.0, step=0.01, format="%.2f")
@@ -2739,6 +2748,10 @@ def _render_trade_entry_form(logger) -> None:
         st.exception(e)
 
 
+# ─────────────────────────────────────────────
+# UPDATE MARKS FORM
+# ─────────────────────────────────────────────
+
 def _render_update_marks_form(pos: dict) -> None:
     """
     Inline form to update current mark prices for a logged position.
@@ -2765,6 +2778,7 @@ def _render_update_marks_form(pos: dict) -> None:
         f"Trade ID: `{trade_id}`"
     )
 
+    # Show what's currently stored
     cur_long  = pos.get("current_long_mid")  or pos.get("current_value")
     cur_short = pos.get("current_short_mid") or pos.get("mark")
 
@@ -2809,6 +2823,7 @@ def _render_update_marks_form(pos: dict) -> None:
             if new_spot  > 0: updates["spot_open"]        = new_spot
             if new_delta > 0: updates["short_delta"]      = new_delta
 
+            # Also compute and store spread value + roll credit estimate
             if new_long > 0 and new_short > 0:
                 import math
                 spread = new_long - new_short
@@ -2897,10 +2912,12 @@ def _render_close_trade_form(trade: dict, logger) -> None:
         if new_long > 0 and new_short > 0:
             spread = round(new_long - new_short, 4)
             updates["current_spread_value"] = spread
+            # Estimate roll credit: time-scaled new short vs buyback
             short_dte = max(int(float(trade.get("short_dte") or 7)), 1)
             new_short_est = new_short * math.sqrt(max(7, short_dte) / short_dte)
             roll_credit   = round(max(new_short_est - new_short, 0.0), 4)
             updates["proposed_roll_credit"] = roll_credit
+            # P&L estimate
             pnl_est = round((spread - entry_px) * 100 * contracts, 2)
             st.info(
                 f"Spread: ${spread:.2f} | Entry: ${entry_px:.2f} | "
@@ -2950,9 +2967,8 @@ def _render_close_trade_form(trade: dict, logger) -> None:
 
 
 # ─────────────────────────────────────────────
-# POLICY LAB + RESEARCH PANELS
+# Policy Lab + Research (sidebar toggles)
 # ─────────────────────────────────────────────
-
 def _render_policy_lab(enriched_rows, transition_queue):
     """Render what-if policy simulation panel."""
     try:
@@ -2960,6 +2976,7 @@ def _render_policy_lab(enriched_rows, transition_queue):
         from policy.policy_simulator import simulate_policy_scenario
         from policy.policy_diff_engine import build_policy_diff
         from policy.policy_report_renderer import render_policy_report
+        import streamlit as st
         st.markdown("### 🧪 Policy Lab")
         key = st.selectbox("Scenario", list(POLICY_SCENARIOS.keys()),
                            format_func=lambda k: POLICY_SCENARIOS[k]["name"], key="pl_sel")
@@ -2973,20 +2990,133 @@ def _render_policy_lab(enriched_rows, transition_queue):
                                          enriched_rows, sim["simulated_rows"])
                 render_policy_report(POLICY_SCENARIOS[key]["name"], diff)
     except Exception as e:
-        st.warning(f"Policy lab error: {e}")
+        import streamlit as st; st.warning(f"Policy lab error: {e}")
 
 
 def _render_research_panel():
     """Render playbook research report."""
     try:
+        import streamlit as st
         from research.playbook_backtest_engine import run_playbook_backtest
         from research.playbook_report_renderer import render_playbook_report
         journals = st.session_state.get("transition_journals", [])
         pkg = run_playbook_backtest(journals)
         render_playbook_report(pkg)
     except Exception as e:
-        st.info(f"Log transitions to populate research. ({e})")
+        import streamlit as st; st.info(f"Log transitions to populate research. ({e})")
 
 
-if __name__ == "__main__":
-    main()
+# ─────────────────────────────────────────────
+# Diagnostics + Validation (sidebar toggles)
+# ─────────────────────────────────────────────
+def _render_diagnostics(enriched_rows, transition_queue, slippage_model=None, playbook_stats=None):
+    try:
+        import streamlit as st
+        from diagnostics.diagnostics_report_engine import build_diagnostics_report
+        from diagnostics.diagnostics_renderer import render_diagnostics_report
+        report = build_diagnostics_report(enriched_rows, transition_queue,
+                                          slippage_model or {}, playbook_stats or {})
+        render_diagnostics_report(report)
+    except Exception as e:
+        import streamlit as st; st.warning(f"Diagnostics: {e}")
+
+
+def _render_validation_panel():
+    try:
+        import streamlit as st
+        from tests.run_validation import run_all_validations
+        if st.button("▶ Run Validation Suite", key="run_validation"):
+            with st.spinner("Running all validation suites..."):
+                result = run_all_validations()
+            st.markdown(f"### Validation: **{result['total_pass']} passed** | **{result['total_fail']} failed**")
+            import pandas as pd
+            rows = [{"Suite":r["suite"],"Test":r.get("test","?"),
+                     "Status":r.get("status","?"),"Error":r.get("error","")} for r in result["results"]]
+            df = pd.DataFrame(rows)
+            passed = df[df["Status"]=="PASS"]; failed = df[df["Status"]!="PASS"]
+            if not failed.empty:
+                st.error("Failures:")
+                st.dataframe(failed, use_container_width=True, hide_index=True)
+            st.success(f"✓ {len(passed)}/{len(rows)} checks passed")
+            with st.expander("All results"):
+                st.dataframe(df, use_container_width=True, hide_index=True)
+    except Exception as e:
+        import streamlit as st; st.warning(f"Validation panel error: {e}")
+
+
+# ─────────────────────────────────────────────
+# Environment banner (call at top of every render)
+# ─────────────────────────────────────────────
+def render_environment_banner(environment: str = "DEV") -> None:
+    """Unmissable DEV/SIM/LIVE banner."""
+    import streamlit as st
+    COLORS = {"DEV":"#6b7280","SIM":"#2563eb","LIVE":"#15803d"}
+    LABELS = {"DEV":"🔧 DEV — execution disabled",
+              "SIM":"📋 SIM — paper environment (no live execution)",
+              "LIVE":"🔴 LIVE — production environment"}
+    env = str(environment).upper()
+    color = COLORS.get(env,"#6b7280"); label = LABELS.get(env,env)
+    st.markdown(f'<div style="padding:8px 16px;background:{color};color:#fff;'
+                f'border-radius:8px;font-weight:700;margin-bottom:10px">{label}</div>',
+                unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# Monitoring / alerting helpers
+# ─────────────────────────────────────────────
+def _run_monitoring(enriched_rows, transition_queue, slippage_model, exposure_metrics, environment="DEV"):
+    """Compute metrics, threshold alerts, and rollback watch."""
+    try:
+        from monitoring.metric_engine import compute_operational_metrics
+        from monitoring.threshold_registry import get_thresholds
+        from monitoring.alert_rule_engine import build_alerts
+        from monitoring.alert_router import route_alert
+        from monitoring.rollback_watch_engine import evaluate_rollback_watch
+
+        metrics = compute_operational_metrics(enriched_rows, transition_queue,
+                                              slippage_model or {}, {}, exposure_metrics or {})
+        thresholds = get_thresholds(environment)
+        alerts = [route_alert(a) for a in build_alerts(metrics, thresholds, environment)]
+        rw_alerts = evaluate_rollback_watch(metrics, None)
+        return metrics, alerts + rw_alerts
+    except Exception as e:
+        return {}, []
+
+
+def _render_monitoring_panel(enriched_rows, transition_queue, slippage_model, exposure_metrics, environment="DEV"):
+    try:
+        import streamlit as st
+        from monitoring.alert_renderer import render_alerts
+        metrics, alerts = _run_monitoring(enriched_rows, transition_queue,
+                                          slippage_model, exposure_metrics, environment)
+        render_alerts(alerts)
+        # Compact health strip
+        if metrics:
+            st.markdown("**Health Metrics**")
+            c1,c2,c3,c4=st.columns(4)
+            c1.metric("Queue Depth",int(metrics.get("queue_depth",0)))
+            c2.metric("Block Rate",f'{metrics.get("blocked_candidate_rate",0)*100:.1f}%')
+            c3.metric("Fill Score",f'{metrics.get("avg_fill_score_recent",0):.1f}')
+            c4.metric("Top Sym %",f'{metrics.get("top_symbol_concentration",0)*100:.1f}%')
+    except Exception as e:
+        import streamlit as st; st.warning(f"Monitoring error: {e}")
+
+
+# ─────────────────────────────────────────────
+# History / snapshot helpers (sidebar toggle)
+# ─────────────────────────────────────────────
+def _render_trends_panel(snapshot_store):
+    try:
+        import streamlit as st
+        from history.trend_engine import compute_metric_trend
+        from history.trend_renderer import render_trend_block
+        if not snapshot_store: st.info("No snapshots yet — trends populate after a few refreshes."); return
+        queue_snaps=[s for s in snapshot_store if s.get("snapshot_type")=="QUEUE_SNAPSHOT"]
+        exec_snaps =[s for s in snapshot_store if s.get("snapshot_type")=="EXECUTION_SNAPSHOT"]
+        if queue_snaps:
+            render_trend_block("Queue Depth", compute_metric_trend(queue_snaps,"queue_depth"))
+        if exec_snaps:
+            render_trend_block("Fill Score",  compute_metric_trend(exec_snaps,"avg_fill_score_recent"))
+            render_trend_block("Delay Rate",  compute_metric_trend(exec_snaps,"delay_rate"))
+    except Exception as e:
+        import streamlit as st; st.warning(f"Trends error: {e}")
