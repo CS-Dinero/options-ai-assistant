@@ -685,9 +685,9 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab = st.tabs([
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab, scanner_tab = st.tabs([
         "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest",
-        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data"
+        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data", "🔭 Deep ITM Scanner"
     ])
 
     with pos_tab:
