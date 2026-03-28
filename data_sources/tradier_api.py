@@ -39,7 +39,11 @@ def _load_tradier_from_streamlit_secrets():
     if not TRADIER_TOKEN:
         try:
             import streamlit as st
-            TRADIER_TOKEN    = st.secrets.get("TRADIER_TOKEN", "")
+            # Accept both key names — TRADIER_API_KEY is what Streamlit Cloud UI saves
+            TRADIER_TOKEN = (
+                st.secrets.get("TRADIER_TOKEN", "")
+                or st.secrets.get("TRADIER_API_KEY", "")
+            )
             TRADIER_BASE_URL = st.secrets.get("TRADIER_BASE_URL", TRADIER_BASE_URL)
         except Exception:
             pass

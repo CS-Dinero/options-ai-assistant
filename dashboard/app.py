@@ -810,6 +810,8 @@ def main():
 
     with live_tab:
         _render_live_data_panel()
+    with scanner_tab:
+        _render_deep_itm_scanner_panel()
 
 
 # ─────────────────────────────────────────────
@@ -3116,6 +3118,155 @@ def _render_trends_panel(snapshot_store):
             render_trend_block("Delay Rate",  compute_metric_trend(exec_snaps,"delay_rate"))
     except Exception as e:
         import streamlit as st; st.warning(f"Trends error: {e}")
+
+
+# ─────────────────────────────────────────────
+# DEEP ITM SCANNER PANEL
+# ─────────────────────────────────────────────
+
+def _render_deep_itm_scanner_panel() -> None:
+    """
+    🔍 Deep ITM Scanner — find live deep ITM calendar candidates via Tradier.
+    Reads TRADIER_API_KEY or TRADIER_TOKEN from Streamlit secrets.
+    """
+    import os
+    try:
+        import pandas as pd
+        _PD = True
+    except ImportError:
+        _PD = False
+
+    st.markdown("### 🔍 Deep ITM Calendar Scanner")
+    st.caption("Live option chain scan using Tradier. Returns deep ITM put/call calendar candidates ranked by cheapness and roll viability.")
+
+    # ── Token check ───────────────────────────────────────────────────────────
+    tradier_key = (
+        st.secrets.get("TRADIER_TOKEN", "") if hasattr(st, "secrets") else ""
+    ) or (
+        st.secrets.get("TRADIER_API_KEY", "") if hasattr(st, "secrets") else ""
+    ) or os.getenv("TRADIER_TOKEN", "") or os.getenv("TRADIER_API_KEY", "")
+
+    if not tradier_key:
+        st.error("❌ Tradier API key not found. Add `TRADIER_API_KEY = \"your_key\"` to Streamlit Cloud secrets.")
+        st.info("Go to: App Settings → Secrets → paste your Tradier bearer token.")
+        return
+
+    st.success("✅ Tradier key detected — ready to scan")
+
+    # ── Inputs ────────────────────────────────────────────────────────────────
+    col1, col2, col3 = st.columns(3)
+    symbol      = col1.selectbox("Symbol", ["TSLA", "SPY", "QQQ", "AAPL", "MSFT", "IWM"], key="scanner_sym")
+    option_type = col2.selectbox("Option type", ["PUT", "CALL"], key="scanner_ot")
+    environment = col3.selectbox("Regime",
+        ["NEUTRAL_TIME_SPREADS", "LOW_VOL_NEUTRAL", "TRENDING", "PREMIUM_SELLING", "HIGH_VOL_UNSTABLE"],
+        key="scanner_env")
+
+    use_sandbox = st.checkbox("Use Tradier sandbox (free, test data)", value=True, key="scanner_sandbox")
+
+    if not st.button("🔍 Scan for Candidates", type="primary", key="scanner_run"):
+        st.info("👆 Select a symbol and hit Scan. Tradier will be queried for live option chains.")
+        return
+
+    # ── Inject token into environment ─────────────────────────────────────────
+    os.environ["TRADIER_TOKEN"] = tradier_key
+    if use_sandbox:
+        os.environ["TRADIER_BASE_URL"] = "https://sandbox.tradier.com/v1"
+    else:
+        os.environ["TRADIER_BASE_URL"] = "https://api.tradier.com/v1"
+
+    # Reload token into the module (module-level var was already set at import)
+    try:
+        import data_sources.tradier_api as _t
+        _t.TRADIER_TOKEN    = tradier_key
+        _t.TRADIER_BASE_URL = os.environ["TRADIER_BASE_URL"]
+    except Exception:
+        pass
+
+    # ── Run scan ──────────────────────────────────────────────────────────────
+    with st.spinner(f"Fetching live chains for {symbol} from Tradier..."):
+        try:
+            from scanner.tradier_calendar_scanner import scan_deep_itm_calendars_live
+            results = scan_deep_itm_calendars_live(
+                symbol=symbol,
+                option_type=option_type,
+                environment=environment,
+            )
+        except Exception as e:
+            st.error(f"Scanner error: {e}")
+            st.exception(e)
+            return
+
+    # ── Display ───────────────────────────────────────────────────────────────
+    if not results:
+        st.warning("No candidates returned.")
+        return
+
+    # Check for error result
+    if len(results) == 1 and "error" in results[0]:
+        st.warning(f"⚠️ {results[0]['error']}")
+        return
+
+    st.success(f"✅ Found {len(results)} candidate(s) for {symbol} {option_type}")
+
+    # Top candidate highlight
+    top = results[0]
+    st.markdown("#### 🏆 Best Candidate")
+    m1,m2,m3,m4,m5 = st.columns(5)
+    m1.metric("Entry Debit",   f"${top['entry_net_debit']:.2f}")
+    m2.metric("Cheapness",     f"{top['entry_cheapness_score']:.1f}")
+    m3.metric("Roll Score",    f"{top['future_roll_score']:.1f}")
+    m4.metric("Recovery Ratio",f"{top['projected_recovery_ratio']:.2f}x")
+    m5.metric("Candidate Score",f"{top['candidate_score']:.1f}")
+
+    col_a, col_b = st.columns(2)
+    col_a.markdown(f"**Long:** {top['long_strike']} {option_type} exp {top['long_expiry']} (DTE {top['long_dte']}) @ ${top['long_mid']:.2f} | Δ {top.get('long_delta','N/A')}")
+    col_b.markdown(f"**Short:** {top['short_strike']} {option_type} exp {top['short_expiry']} (DTE {top['short_dte']}) @ ${top['short_mid']:.2f} | Δ {top.get('short_delta','N/A')}")
+
+    st.caption(f"Spot: ${top['spot_price']:.2f} | Expected move: ${top['expected_move']:.2f} | EM clearance: {top['expected_move_clearance']:.2f}x | Intrinsic: ${top['long_intrinsic_value']:.2f} | Extrinsic: ${top['long_extrinsic_cost']:.2f}")
+
+    # Full table
+    st.markdown("#### All Candidates")
+    if _PD:
+        display_cols = [
+            "symbol","option_type","short_strike","short_expiry","short_dte",
+            "long_strike","long_expiry","long_dte","entry_net_debit",
+            "entry_debit_width_ratio","long_extrinsic_cost","projected_recovery_ratio",
+            "future_roll_score","entry_cheapness_score","candidate_score",
+        ]
+        df = pd.DataFrame(results)
+        # Show only cols that exist
+        show = [c for c in display_cols if c in df.columns]
+        st.dataframe(
+            df[show].style.format({
+                "entry_net_debit":"{:.2f}","entry_debit_width_ratio":"{:.3f}",
+                "long_extrinsic_cost":"{:.2f}","projected_recovery_ratio":"{:.2f}",
+                "future_roll_score":"{:.1f}","entry_cheapness_score":"{:.1f}",
+                "candidate_score":"{:.1f}",
+            }),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        for r in results:
+            st.json(r)
+
+    # Tracker integration CTA
+    st.divider()
+    st.markdown("#### 📊 Add to Campaign Tracker")
+    st.caption("Use these values to initialize a campaign in your tracker:")
+    st.code(f"""
+from tracker.campaign_tracker import CampaignTracker
+
+t = CampaignTracker(
+    campaign_id   = "cmp_{symbol.lower()}_001",
+    symbol        = "{symbol}",
+    structure_type= "CALENDAR",
+    entry_date    = "{__import__('datetime').date.today().isoformat()}",
+    starting_capital = 25_000.0,
+    entry_debit   = {top['entry_net_debit']:.2f},
+    contracts     = 1,   # scale up as capital allows
+)
+print(t.summary())
+""", language="python")
 
 
 if __name__ == "__main__":
