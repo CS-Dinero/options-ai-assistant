@@ -814,6 +814,7 @@ def main():
         _render_deep_itm_scanner_panel()
 
 
+
 # ─────────────────────────────────────────────
 # TRADE LOG PANEL
 # ─────────────────────────────────────────────
@@ -3266,6 +3267,9 @@ def _render_deep_itm_scanner_panel() -> None:
         file_name=f"scanner_{symbol}_{__import__('datetime').date.today()}.csv",
         mime="text/csv", use_container_width=True)
 
+    # ── Roll Advisor ──────────────────────────────────────────────────────────
+    _render_roll_advisor_panel()
+
     # ── Trade Log ─────────────────────────────────────────────────────────────
     _render_trade_log_section()
 
@@ -3357,6 +3361,150 @@ def _render_trade_log_section():
             st.download_button("⬇ Download Weekly Review TXT",
                                review, file_name=f"weekly_review_{date.today()}.txt",
                                mime="text/plain")
+
+
+# ─────────────────────────────────────────────
+# ROLL ADVISOR PANEL
+# ─────────────────────────────────────────────
+def _render_roll_advisor_panel():
+    """Live roll advisor — checks if a net-credit roll is available for open campaigns."""
+    import os
+    from engine.roll_advisor import get_roll_advice
+    from reports.report_generator import load_trade_log, log_trade, TradeLogEntry
+
+    LOG_PATH = "data/trade_log.csv"
+    os.makedirs("data", exist_ok=True)
+
+    st.divider()
+    st.markdown("### 🔄 Roll Advisor — Live Roll Check")
+    st.caption("Checks Tradier live chain to see if a net-credit roll is available on your open campaigns.")
+
+    tradier_key = ""
+    try:
+        tradier_key = (st.secrets.get("TRADIER_TOKEN","") or st.secrets.get("TRADIER_API_KEY",""))
+    except Exception:
+        pass
+    if not tradier_key:
+        tradier_key = os.getenv("TRADIER_TOKEN","") or os.getenv("TRADIER_API_KEY","")
+
+    if not tradier_key:
+        st.warning("Tradier key required for live roll check. Add to Streamlit secrets.")
+        return
+
+    os.environ["TRADIER_TOKEN"] = tradier_key
+    os.environ["TRADIER_BASE_URL"] = "https://api.tradier.com/v1"
+    try:
+        import data_sources.tradier_api as _t
+        _t.TRADIER_TOKEN = tradier_key
+        _t.TRADIER_BASE_URL = "https://api.tradier.com/v1"
+    except Exception:
+        pass
+
+    trades = load_trade_log(LOG_PATH)
+    open_trades = [t for t in trades if t.status == "OPEN"]
+
+    if not open_trades:
+        st.info("No open campaigns in trade log. Log a trade first in the '➕ Log a Trade' tab.")
+        return
+
+    # Let user pick which campaign to check
+    trade_labels = [f"{t.trade_id} — {t.symbol} {t.short_strike}/{t.long_strike} "
+                    f"{t.option_type} (opened {t.date_opened})" for t in open_trades]
+    selected_idx = st.selectbox("Select open campaign to check:", range(len(open_trades)),
+                                format_func=lambda i: trade_labels[i], key="roll_trade_sel")
+    trade = open_trades[selected_idx]
+
+    # Credits/costs so far
+    c1,c2,c3 = st.columns(3)
+    credits_so_far = c1.number_input("Credits collected so far ($)", value=float(trade.harvest_credit + trade.roll_credit),
+                                      step=0.05, format="%.2f", key="roll_credits")
+    costs_so_far   = c2.number_input("Roll costs paid so far ($)", value=float(trade.roll_cost),
+                                      step=0.05, format="%.2f", key="roll_costs")
+    long_expiry    = c3.text_input("Long leg expiry (YYYY-MM-DD)", value=trade.long_expiry, key="roll_long_exp")
+
+    if not st.button("🔍 Check Roll Now", type="primary", key="roll_check_btn"):
+        basis = round(trade.entry_debit - credits_so_far + costs_so_far, 2)
+        rec   = round(max(0.0, (trade.entry_debit - basis) / max(0.01, trade.entry_debit) * 100), 1)
+        st.info(f"Current campaign: {trade.symbol} | Basis ${basis:.2f} | {rec:.1f}% recovered | "
+                f"Entry debit ${trade.entry_debit:.2f}")
+        return
+
+    with st.spinner(f"Checking live {trade.symbol} chain on Tradier..."):
+        result = get_roll_advice(
+            symbol=trade.symbol, option_type=trade.option_type,
+            current_short_strike=trade.short_strike,
+            current_short_expiry=trade.short_expiry,
+            long_expiry=long_expiry,
+            entry_debit=trade.entry_debit,
+            total_credits_so_far=credits_so_far,
+            total_costs_so_far=costs_so_far,
+            contracts=trade.contracts,
+        )
+
+    if isinstance(result, dict) and "error" in result:
+        st.error(f"Roll check failed: {result['error']}")
+        return
+
+    r = result
+    # Color the action
+    action_color = {"ROLL": "🟢", "WAIT": "🟡", "HARVEST": "🟡", "HOLD": "⚪"}.get(r.action, "⚪")
+    st.markdown(f"## {action_color} {r.action}")
+    st.markdown(f"**{r.recommendation}**")
+
+    if r.action == "ROLL":
+        m1,m2,m3,m4 = st.columns(4)
+        m1.metric("Close current at", f"${r.current_short_mid:.2f}")
+        m2.metric("Sell new at", f"${r.proposed_short_mid:.2f}")
+        m3.metric("Net credit", f"${r.roll_credit_est:.2f}", delta="positive" if r.net_credit_positive else "negative")
+        m4.metric("Continuity score", f"{r.continuity_score:.0f}/100")
+
+        st.markdown(f"""
+| | Before Roll | After Roll |
+|---|---|---|
+| Basis | ${r.campaign_basis_before:.2f} | ${r.campaign_basis_after:.2f} |
+| Recovered | {r.recovery_pct_before:.1f}% | {r.recovery_pct_after:.1f}% |
+| Excess harvest | — | ${r.excess_harvest_after:.2f} |
+| Spreads funded | ❌ | {"✅ YES" if r.spread_funding_unlocked else "❌ Not yet"} |
+""")
+
+        st.markdown("**📍 How to place the roll in Tradier/Schwab:**")
+        st.code(
+            f"BUY  TO CLOSE: {r.current_short_strike} {r.option_type} exp {r.current_short_expiry}  @ ~${r.current_short_mid:.2f}\n"
+            f"SELL TO OPEN:  {r.proposed_short_strike} {r.option_type} exp {r.proposed_short_expiry} @ ~${r.proposed_short_mid:.2f}\n"
+            f"NET CREDIT:    ${r.roll_credit_est:.2f} per contract",
+            language="text")
+
+        # Log the roll
+        if st.button("✅ I placed this roll — log it", key="log_roll_btn"):
+            from reports.report_generator import log_trade as _log, TradeLogEntry
+            import uuid
+            updated = TradeLogEntry(
+                trade_id=trade.trade_id, date_opened=trade.date_opened,
+                symbol=trade.symbol, structure=trade.structure,
+                option_type=trade.option_type, long_strike=trade.long_strike,
+                long_expiry=long_expiry, short_strike=r.proposed_short_strike,
+                short_expiry=r.proposed_short_expiry, entry_debit=trade.entry_debit,
+                contracts=trade.contracts, candidate_score=trade.candidate_score,
+                roll_score=r.continuity_score,
+                harvest_credit=credits_so_far,
+                roll_credit=trade.roll_credit + r.proposed_short_mid,
+                roll_cost=costs_so_far + r.current_short_mid,
+                realized_pnl=round(-r.campaign_basis_after, 4),
+                notes=f"Rolled {r.current_short_expiry}→{r.proposed_short_expiry} net ${r.roll_credit_est:.2f}",
+                status="OPEN")
+            # Overwrite existing entry — just append a new updated row
+            _log(LOG_PATH, updated)
+            st.success(f"✅ Roll logged. New short: {r.proposed_short_strike} exp {r.proposed_short_expiry}. "
+                       f"Basis: ${r.campaign_basis_after:.2f} ({r.recovery_pct_after:.1f}% recovered)")
+            if r.spread_funding_unlocked:
+                st.balloons()
+                st.success(f"🌟 GOLDEN HARVEST — ${r.excess_harvest_after:.2f} excess available for spreads!")
+    else:
+        m1,m2,m3 = st.columns(3)
+        m1.metric("Current close cost", f"${r.current_short_mid:.2f}")
+        m2.metric("Best new credit", f"${r.proposed_short_mid:.2f}")
+        m3.metric("Net if rolled now", f"${r.roll_credit_est:.2f}")
+        st.info(f"Check back when the short decays more. Current basis: ${r.campaign_basis_before:.2f} ({r.recovery_pct_before:.1f}% recovered)")
 
 
 if __name__ == "__main__":
