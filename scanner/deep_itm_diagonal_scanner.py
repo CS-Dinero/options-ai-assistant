@@ -5,8 +5,8 @@ from scanner.deep_itm_entry_filters import (
     OptionLegQuote, DeepITMEntryFilterConfig, evaluate_deep_itm_entry_filters,
 )
 from scanner.deep_itm_calendar_scanner import (
-    MarketContextLite, estimate_entry_net_debit, estimate_expected_move_clearance,
-    estimate_liquidity_score, estimate_future_roll_score, _leg_to_dict,
+    MarketContextLite, estimate_calendar_entry_net_debit, estimate_expected_move_clearance,
+    estimate_liquidity_score, estimate_future_roll_score,
 )
 
 @dataclass(slots=True)
@@ -31,7 +31,7 @@ def build_deep_itm_diagonal_candidate(context: MarketContextLite, option_type: s
                                        long_dte: int, short_dte: int,
                                        next_gen_shorts: list[OptionLegQuote],
                                        cfg: DeepITMDiagonalConfig) -> DeepITMDiagonalCandidate|None:
-    net_debit=estimate_entry_net_debit(long_leg.mid,short_leg.mid)
+    net_debit=estimate_calendar_entry_net_debit(long_leg.mid,short_leg.mid)
     strike_width=abs(long_leg.strike-short_leg.strike)
     fut_roll=estimate_future_roll_score(next_gen_shorts)
     liquidity=estimate_liquidity_score(long_leg,short_leg)
@@ -47,7 +47,8 @@ def build_deep_itm_diagonal_candidate(context: MarketContextLite, option_type: s
     return DeepITMDiagonalCandidate(
         symbol=context.symbol,campaign_family="DEEP_ITM_CAMPAIGN",
         entry_family="DEEP_ITM_DIAGONAL_ENTRY",structure="DEEP_ITM_DIAGONAL",
-        option_type=option_type,long_leg=_leg_to_dict(long_leg),short_leg=_leg_to_dict(short_leg),
+        option_type=option_type,long_leg={'symbol':long_leg.symbol,'option_type':long_leg.option_type,'expiry':long_leg.expiry,'strike':long_leg.strike,'mid':long_leg.mid,'delta':long_leg.delta},
+        short_leg={'symbol':short_leg.symbol,'option_type':short_leg.option_type,'expiry':short_leg.expiry,'strike':short_leg.strike,'mid':short_leg.mid,'delta':short_leg.delta},
         short_dte=short_dte,long_dte=long_dte,strike_width=round(strike_width,2),
         entry_net_debit=net_debit,entry_cheapness_score=result.entry_cheapness_score,
         future_roll_score=fut_roll,expected_move_clearance=em_clear,liquidity_score=liquidity,
