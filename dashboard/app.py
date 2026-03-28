@@ -3249,6 +3249,26 @@ def _render_deep_itm_scanner_panel() -> None:
         for r in results:
             st.json(r)
 
+    # ── Morning brief download ───────────────────────────────────────────────
+    from reports.report_generator import generate_morning_brief, generate_scanner_csv
+    st.divider()
+    dl1, dl2 = st.columns(2)
+    brief_text = generate_morning_brief(results, symbol, top.get("spot_price", 0.0))
+    dl1.download_button(
+        "📄 Download Morning Brief (TXT)",
+        brief_text,
+        file_name=f"morning_brief_{symbol}_{__import__('datetime').date.today()}.txt",
+        mime="text/plain", use_container_width=True)
+    scanner_csv = generate_scanner_csv(results)
+    dl2.download_button(
+        "📊 Download to Excel/Sheets (CSV)",
+        scanner_csv,
+        file_name=f"scanner_{symbol}_{__import__('datetime').date.today()}.csv",
+        mime="text/csv", use_container_width=True)
+
+    # ── Trade Log ─────────────────────────────────────────────────────────────
+    _render_trade_log_section()
+
     # Tracker integration CTA
     st.divider()
     st.markdown("#### 📊 Add to Campaign Tracker")
@@ -3267,6 +3287,76 @@ t = CampaignTracker(
 )
 print(t.summary())
 """, language="python")
+
+
+# ─────────────────────────────────────────────
+# TRADE LOG PANEL (scanner tab section)
+# ─────────────────────────────────────────────
+def _render_trade_log_section():
+    """Embedded trade log inside the scanner tab — log a trade after placing it manually."""
+    import uuid
+    from reports.report_generator import TradeLogEntry, log_trade, load_trade_log, generate_weekly_review
+
+    LOG_PATH = "data/trade_log.csv"
+    import os; os.makedirs("data", exist_ok=True)
+
+    st.divider()
+    st.markdown("### 📋 Trade Log")
+    st.caption("Log trades after you place them manually in Schwab or Tradier. Used for weekly review.")
+
+    log_tab, review_tab = st.tabs(["➕ Log a Trade", "📊 Weekly Review"])
+
+    with log_tab:
+        with st.form("log_trade_form"):
+            c1,c2,c3 = st.columns(3)
+            sym    = c1.text_input("Symbol", "TSLA")
+            struct = c2.selectbox("Structure", ["CALENDAR","DIAGONAL","SPREAD"])
+            otype  = c3.selectbox("Type", ["PUT","CALL"])
+            c4,c5  = st.columns(2)
+            long_k = c4.number_input("Long strike", value=415.0, step=2.5)
+            short_k= c5.number_input("Short strike", value=420.0, step=2.5)
+            c6,c7  = st.columns(2)
+            long_e = c6.text_input("Long expiry (YYYY-MM-DD)", "2026-05-15")
+            short_e= c7.text_input("Short expiry (YYYY-MM-DD)", "2026-04-02")
+            c8,c9,c10 = st.columns(3)
+            debit  = c8.number_input("Entry debit ($)", value=0.55, step=0.05, format="%.2f")
+            conts  = c9.number_input("Contracts", value=1, min_value=1, step=1)
+            score  = c10.number_input("Candidate score", value=88.0, step=1.0)
+            notes  = st.text_input("Notes (optional)", "")
+            submitted = st.form_submit_button("✅ Log This Trade", type="primary")
+
+        if submitted:
+            entry = TradeLogEntry(
+                trade_id=f"T{uuid.uuid4().hex[:6].upper()}",
+                date_opened=date.today().isoformat(), symbol=sym, structure=struct,
+                option_type=otype, long_strike=long_k, long_expiry=long_e,
+                short_strike=short_k, short_expiry=short_e, entry_debit=debit,
+                contracts=conts, candidate_score=score, roll_score=0.0, notes=notes)
+            log_trade(LOG_PATH, entry)
+            st.success(f"✅ Trade {entry.trade_id} logged — {sym} {short_k}/{long_k} {struct} @ ${debit:.2f}")
+
+        trades = load_trade_log(LOG_PATH)
+        if trades:
+            import pandas as pd
+            rows = [{
+                "ID": t.trade_id, "Date": t.date_opened, "Symbol": t.symbol,
+                "Struct": t.structure, "Short": t.short_strike, "Long": t.long_strike,
+                "Debit": t.entry_debit, "Cts": t.contracts, "Status": t.status,
+                "Net $": round((t.harvest_credit+t.roll_credit-t.roll_cost)*t.contracts*100, 2)
+            } for t in trades]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    with review_tab:
+        capital = st.number_input("Account capital ($)", value=25_000.0, step=1000.0, key="wkly_cap")
+        trades = load_trade_log(LOG_PATH)
+        if not trades:
+            st.info("No trades logged yet. Use the 'Log a Trade' tab after placing a trade manually.")
+        else:
+            review = generate_weekly_review(trades, capital)
+            st.text(review)
+            st.download_button("⬇ Download Weekly Review TXT",
+                               review, file_name=f"weekly_review_{date.today()}.txt",
+                               mime="text/plain")
 
 
 if __name__ == "__main__":
