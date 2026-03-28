@@ -456,6 +456,57 @@ def test_stage_13_schema_validator_catches_bad_objects():
 # ─────────────────────────────────────────────────────────────────────────────
 # FULL WALKTHROUGH runner (ordered, stops on first failure per stage)
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 14 — Cross-layer consistency
+# ─────────────────────────────────────────────────────────────────────────────
+def test_stage_14_cross_layer_consistency():
+    """Asserts that lifecycle, ranker, queue, workspace, and ticket all agree."""
+    from performance.trade_logger import build_campaign_trade_summary
+    ld     = _make_lifecycle_decision()
+    ranked = _make_ranked_paths()
+    qrow   = _make_queue_row()
+    ws     = _make_workspace()
+    ticket = _make_ticket()
+    rec    = _make_trade_record()
+    snap   = _make_ledger_snap()
+
+    # Lifecycle → Ranker: selected transition should be top path or compatible
+    if ld.selected_transition_type and ranked:
+        # lifecycle says ROLL_SAME_SIDE — ranker should have it at or near top
+        top_approved = next((r for r in ranked if r.approved), None)
+        if top_approved and ld.selected_transition_type == "ROLL_SAME_SIDE":
+            assert top_approved.path_code in ("ROLL_SAME_SIDE","DEFER_AND_WAIT"),                 f"Ranker top={top_approved.path_code} inconsistent with lifecycle={ld.selected_transition_type}"
+
+    # Ranker → Queue: best_path_code should match top ranked path
+    if ranked:
+        assert qrow.best_path_code == ranked[0].path_code,             f"Queue best_path={qrow.best_path_code} != ranker top={ranked[0].path_code}"
+
+    # Queue → Workspace: selected_path.path_code should match best_path_code
+    if ws.selected_path and qrow.best_path_code:
+        assert ws.selected_path["path_code"] == qrow.best_path_code,             f"Workspace selected={ws.selected_path['path_code']} != queue best={qrow.best_path_code}"
+
+    # Workspace → Ticket: selected_path should match
+    if ticket.selected_path and ws.selected_path:
+        assert ticket.selected_path == ws.selected_path["path_code"],             f"Ticket selected={ticket.selected_path} != workspace selected={ws.selected_path['path_code']}"
+
+    # Ticket basis should be less than net_campaign_basis (roll reduces basis)
+    if ticket.projected_basis_after_action is not None:
+        assert ticket.projected_basis_after_action <= NET_BASIS + 0.01,             f"Ticket basis_after={ticket.projected_basis_after_action} > NET_BASIS={NET_BASIS}"
+
+    # Logger vs Ledger: basis agreement (within event-supplied values)
+    summary = build_campaign_trade_summary(rec)
+    assert abs(summary["net_campaign_basis"] - NET_BASIS) < 0.01,         f"Logger basis={summary['net_campaign_basis']} vs ledger basis={NET_BASIS}"
+    assert abs(summary["campaign_recovered_pct"] - RECOVERED_PCT) < 0.5,         f"Logger recovered={summary['campaign_recovered_pct']} vs ledger={RECOVERED_PCT}"
+
+    # Queue → Research: research row should carry queue fields through
+    from research.campaign_research_builder import build_research_row_from_queue_row
+    rr = build_research_row_from_queue_row(qrow)
+    assert rr.net_campaign_basis == NET_BASIS
+    assert rr.best_path_code == qrow.best_path_code
+    assert rr.campaign_state == qrow.campaign_state
+
 WALKTHROUGH_STAGES = [
     ("Stage 01 — scanner candidate",      test_stage_1_scanner_candidate),
     ("Stage 02 — enriched row",           test_stage_2_enriched_row),
@@ -470,6 +521,7 @@ WALKTHROUGH_STAGES = [
     ("Stage 11 — research row",           test_stage_11_research_row),
     ("Stage 12 — journal row",            test_stage_12_journal_row),
     ("Stage 13 — schema validator",       test_stage_13_schema_validator_catches_bad_objects),
+    ("Stage 14 — cross-layer consistency",test_stage_14_cross_layer_consistency),
 ]
 
 if __name__ == "__main__":

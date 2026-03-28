@@ -1,0 +1,73 @@
+{
+  "summary": {
+    "total_symbols": 3,
+    "candidate_found_count": 0,
+    "ticket_ready_count": 1,
+    "warning_count": 0,
+    "roll_ready_count": 1,
+    "defensive_count": 0,
+    "bank_reduce_count": 0,
+    "best_path_roll_count": 1,
+    "best_path_flip_count": 0,
+    "best_path_collapse_count": 0,
+    "act_now_count": 0,
+    "decide_now_count": 0,
+    "watch_closely_count": 1,
+    "improve_later_count": 0
+  },
+  "rows": [
+    {
+      "symbol": "TSLA",
+      "regime_environment": "NEUTRAL_TIME_SPREADS",
+      "candidate_found": false,
+      "campaign_family": "DEEP_ITM_CAMPAIGN",
+      "entry_family": "DEEP_ITM_CALENDAR_ENTRY",
+      "campaign_state": "ROLL_READY",
+      "campaign_action": "ROLL",
+      "best_path_code": "ROLL_SAME_SIDE",
+      "best_path_score": 57.739417,
+      "queue_priority_band": "WATCH_CLOSELY",
+      "queue_priority_score": 58.423095,
+      "ticket_ready": true,
+      "warning_count": 0,
+      "warnings": [],
+      "notes": [
+        "TSLA: state=ROLL_READY, best_path=ROLL_SAME_SIDE, queue=WATCH_CLOSELY"
+      ]
+    },
+    {
+      "symbol": "SPY",
+      "regime_environment": "NEUTRAL_TIME_SPREADS",
+      "candidate_found": false,
+      "campaign_family": null,
+      "entry_family": null,
+      "campaign_state": null,
+      "campaign_action": null,
+      "best_path_code": null,
+      "best_path_score": null,
+      "queue_priority_band": null,
+      "queue_priority_score": null,
+      "ticket_ready": false,
+      "warning_count": 0,
+      "warnings": [],
+      "notes": []
+    },
+    {
+      "symbol": "QQQ",
+      "regime_environment": "NEUTRAL_TIME_SPREADS",
+      "candidate_found": false,
+      "campaign_family": null,
+      "entry_family": null,
+      "campaign_state": null,
+      "campaign_action": null,
+      "best_path_code": null,
+      "best_path_score": null,
+      "queue_priority_band": null,
+      "queue_priority_score": null,
+      "ticket_ready": false,
+      "warning_count": 0,
+      "warnings": [],
+      "notes": []
+    }
+  ]
+}

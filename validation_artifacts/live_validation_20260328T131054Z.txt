@@ -1,0 +1,10 @@
+LIVE VALIDATION SUMMARY
+symbols=3 | candidates=0 | tickets=1 | warnings=0
+states: roll_ready=1 | defensive=0 | bank_reduce=0
+best_paths: roll=1 | flip=0 | collapse=0
+queue_bands: act_now=0 | decide_now=0 | watch_closely=1 | improve_later=0
+
+TSLA: regime=NEUTRAL_TIME_SPREADS | candidate=False | state=ROLL_READY | path=ROLL_SAME_SIDE | queue=WATCH_CLOSELY | ticket=True | warnings=0
+  NOTE: TSLA: state=ROLL_READY, best_path=ROLL_SAME_SIDE, queue=WATCH_CLOSELY
+SPY: regime=NEUTRAL_TIME_SPREADS | candidate=False | state=None | path=None | queue=None | ticket=False | warnings=0
+QQQ: regime=NEUTRAL_TIME_SPREADS | candidate=False | state=None | path=None | queue=None | ticket=False | warnings=0
