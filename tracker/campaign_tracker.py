@@ -16,6 +16,7 @@ class CampaignTracker:
     total_harvest_collected: float = 0.0
     total_roll_costs: float = 0.0
     spread_profit: float = 0.0
+    contracts: int = 1
 
     events: list[dict[str,Any]] = field(default_factory=list)
 
@@ -27,6 +28,9 @@ class CampaignTracker:
     excess_harvest: float = 0.0
     spread_funding_available: float = 0.0
     active_debit_capital: float = 0.0
+    net_weekly_gain_per_contract: float = 0.0
+    net_weekly_gain_total: float = 0.0
+    true_weekly_return_total: float = 0.0
 
     def __post_init__(self):
         self.active_debit_capital = self.entry_debit
@@ -46,6 +50,11 @@ class CampaignTracker:
         self.excess_harvest = round(
             max(0.0, self.total_harvest_collected - self.total_roll_costs - self.entry_debit), 6)
         self.spread_funding_available = self.excess_harvest + round(self.spread_profit, 6)
+        # Contract-scaled output
+        self.net_weekly_gain_per_contract = self.net_weekly_gain
+        self.net_weekly_gain_total = round(self.net_weekly_gain * self.contracts, 6)
+        self.true_weekly_return_total = round(
+            self.net_weekly_gain_total / max(0.01, self.starting_capital) * 100, 6)
 
     def apply_harvest(self, credit: float, date: str, note: str = "") -> "CampaignTracker":
         self.total_harvest_collected = round(self.total_harvest_collected + credit, 6)
@@ -82,6 +91,10 @@ class CampaignTracker:
             "net_weekly_gain": self.net_weekly_gain,
             "true_weekly_return_pct": round(self.true_weekly_return, 4),
             "event_count": len(self.events),
+            "contracts": self.contracts,
+            "net_weekly_gain_per_contract": self.net_weekly_gain_per_contract,
+            "net_weekly_gain_total": self.net_weekly_gain_total,
+            "true_weekly_return_total": round(self.true_weekly_return_total, 4),
         }
 
     def print_summary(self):

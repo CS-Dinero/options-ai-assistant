@@ -165,6 +165,43 @@ def test_8_full_tsla_walkthrough():
     return s
 
 
+
+def test_9_contract_scaling():
+    """10 contracts should scale gain and return correctly without changing per-unit math."""
+    t1 = CampaignTracker(
+        campaign_id="cmp_tsla_001", symbol="TSLA", structure_type="CALENDAR",
+        entry_date="2026-04-01", starting_capital=CAPITAL, entry_debit=ENTRY_DEBIT,
+        contracts=1,
+    )
+    t10 = CampaignTracker(
+        campaign_id="cmp_tsla_010", symbol="TSLA", structure_type="CALENDAR",
+        entry_date="2026-04-01", starting_capital=CAPITAL, entry_debit=ENTRY_DEBIT,
+        contracts=10,
+    )
+    for t in (t1, t10):
+        t.apply_harvest(2.50, "2026-04-08")
+        t.apply_roll(1.00, 2.20, "2026-04-15")
+        t.apply_roll(0.85, 2.10, "2026-04-22")
+
+    s1=t1.summary(); s10=t10.summary()
+
+    # Per-contract math must be identical regardless of contract count
+    assert s1["net_campaign_basis"] == s10["net_campaign_basis"]
+    assert s1["campaign_recovered_pct"] == s10["campaign_recovered_pct"]
+    assert s1["net_weekly_gain_per_contract"] == s10["net_weekly_gain_per_contract"]
+
+    # Scaled values must multiply correctly
+    assert abs(s10["net_weekly_gain_total"] - s1["net_weekly_gain_total"] * 10) < 0.001
+    assert s10["net_weekly_gain_total"] > s1["net_weekly_gain_total"]
+
+    # True return on capital scales with total dollar gain
+    assert abs(s10["true_weekly_return_total"] - s1["true_weekly_return_total"] * 10) < 0.001
+
+    print(f"\n  1 contract:  ${s1['net_weekly_gain_total']:>8.2f} gain | {s1['true_weekly_return_total']:.4f}% of capital")
+    print(f"  10 contracts:${s10['net_weekly_gain_total']:>8.2f} gain | {s10['true_weekly_return_total']:.4f}% of capital")
+    t10.print_summary()
+
+
 # ── Runner ────────────────────────────────────────────────────────────────────
 TESTS = [
     ("1 Entry evaluation",     test_1_entry_evaluation),
@@ -175,6 +212,7 @@ TESTS = [
     ("6 Roll event",           test_6_roll_event_applied),
     ("7 Spread funding",       test_7_spread_funding_assessment),
     ("8 Full TSLA walkthrough",test_8_full_tsla_walkthrough),
+    ("9 Contract scaling",     test_9_contract_scaling),
 ]
 
 if __name__ == "__main__":
