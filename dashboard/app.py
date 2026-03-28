@@ -687,7 +687,7 @@ def main():
     st.markdown("## 🗂 Tools")
     pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab, scanner_tab = st.tabs([
         "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest",
-        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data", "🔭 Deep ITM Scanner"
+        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data", "🔍 Deep ITM Scanner"
     ])
 
     with pos_tab:
@@ -3161,7 +3161,7 @@ def _render_deep_itm_scanner_panel() -> None:
         ["NEUTRAL_TIME_SPREADS", "LOW_VOL_NEUTRAL", "TRENDING", "PREMIUM_SELLING", "HIGH_VOL_UNSTABLE"],
         key="scanner_env")
 
-    use_sandbox = st.checkbox("Use Tradier sandbox (free, test data)", value=True, key="scanner_sandbox")
+    use_sandbox = st.checkbox("Use Tradier sandbox (test data, 15min delay)", value=False, key="scanner_sandbox")
 
     if not st.button("🔍 Scan for Candidates", type="primary", key="scanner_run"):
         st.info("👆 Select a symbol and hit Scan. Tradier will be queried for live option chains.")

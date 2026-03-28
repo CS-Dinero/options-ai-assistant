@@ -32,10 +32,8 @@ except ImportError:
 # ─────────────────────────────────────────────
 
 TRADIER_TOKEN    = os.getenv("TRADIER_TOKEN", "")
-TRADIER_BASE_URL = os.getenv("TRADIER_BASE_URL", "")
-
-_PRODUCTION_URL = "https://api.tradier.com/v1"
-_SANDBOX_URL    = "https://sandbox.tradier.com/v1"
+# Default to production. Add TRADIER_BASE_URL = "https://sandbox.tradier.com/v1" to secrets for sandbox.
+TRADIER_BASE_URL = os.getenv("TRADIER_BASE_URL", "https://api.tradier.com/v1")
 
 def _load_tradier_from_streamlit_secrets():
     global TRADIER_TOKEN, TRADIER_BASE_URL
@@ -50,10 +48,6 @@ def _load_tradier_from_streamlit_secrets():
             TRADIER_BASE_URL = st.secrets.get("TRADIER_BASE_URL", TRADIER_BASE_URL)
         except Exception:
             pass
-    # Default to production when a token is present but no URL was explicitly set.
-    # Sandbox requires a separate sandbox account; most user tokens are production.
-    if not TRADIER_BASE_URL:
-        TRADIER_BASE_URL = _PRODUCTION_URL
 
 _load_tradier_from_streamlit_secrets()
 
