@@ -27,7 +27,7 @@ from providers.data_provider_interface import MarketDataProvider
 class TradierConfig:
     access_token:  str
     account_id:    str
-    use_sandbox:   bool = True
+    use_sandbox:   bool = False
     timeout_sec:   int  = 15
 
     @property
@@ -213,7 +213,7 @@ class TradierProvider(MarketDataProvider):
             "preferred_risk_dollars": 500,
             # Strategy config defaults
             "default_spread_width": 5,
-            "front_dte":            market_short_dte,
+            "front_dte":            short_dte,
             "event_flag":           False,
         }
 

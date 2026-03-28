@@ -26,6 +26,6 @@ def build_provider(provider_type: str, **kwargs) -> MarketDataProvider:
         cfg = TradierConfig(
             access_token=kwargs.get("access_token", ""),
             account_id=kwargs.get("account_id", ""),
-            use_sandbox=kwargs.get("use_sandbox", True))
+            use_sandbox=kwargs.get("use_sandbox", False))
         return TradierProvider(cfg)
     raise ValueError(f"Unknown provider: '{provider_type}'. Valid: mock, massive, csv, tradier")
