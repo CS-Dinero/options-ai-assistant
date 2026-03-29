@@ -3156,13 +3156,20 @@ def _render_deep_itm_scanner_panel() -> None:
 
     # ── Inputs ────────────────────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
-    symbol      = col1.selectbox("Symbol", ["TSLA", "SPY", "QQQ", "AAPL", "MSFT", "IWM"], key="scanner_sym")
+    all_symbols = ["TSLA","SPY","QQQ","AAPL","MSFT","IWM",
+                    "NVDA","AMZN","META","GOOGL","AMD","PLTR",
+                    "SOFI","MSTR","COIN","SMCI","MARA","NFLX","DIA","GLD"]
+    symbol = col1.selectbox("Symbol", all_symbols, key="scanner_sym")
+    custom = col1.text_input("Or type any symbol", value="", placeholder="NFLX, NVDA...", key="scanner_custom")
+    if custom.strip(): symbol = custom.strip().upper()
     option_type = col2.selectbox("Option type", ["PUT", "CALL"], key="scanner_ot")
     environment = col3.selectbox("Regime",
         ["NEUTRAL_TIME_SPREADS", "LOW_VOL_NEUTRAL", "TRENDING", "PREMIUM_SELLING", "HIGH_VOL_UNSTABLE"],
-        key="scanner_env")
+        index=0, key="scanner_env")
 
     use_sandbox = st.checkbox("Use Tradier sandbox (test data, 15min delay)", value=False, key="scanner_sandbox")
+    aggressive  = st.checkbox("Show all candidates (aggressive mode — overrides filters)", value=True, key="scanner_aggressive")
+    st.caption("✓ Aggressive mode recommended — shows all deep ITM rolls regardless of cheapness score")
 
     if not st.button("🔍 Scan for Candidates", type="primary", key="scanner_run"):
         st.info("👆 Select a symbol and hit Scan. Tradier will be queried for live option chains.")
@@ -3191,6 +3198,7 @@ def _render_deep_itm_scanner_panel() -> None:
                 symbol=symbol,
                 option_type=option_type,
                 environment=environment,
+                aggressive=aggressive,
             )
         except Exception as e:
             st.error(f"Scanner error: {e}")
