@@ -8,6 +8,7 @@ class OptionLegQuote:
     symbol: str; option_type: str; expiry: str; strike: float
     bid: float; ask: float; mid: float; delta: float|None
     open_interest: int|None; volume: int|None
+    dte: int|None = None
 
 @dataclass(slots=True)
 class DeepITMEntryFilterConfig:
