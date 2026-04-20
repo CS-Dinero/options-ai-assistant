@@ -43,18 +43,9 @@ class MassiveProvider(MarketDataProvider):
 
             short_dte = _compute_dte(short_exp)
 
-            _straddle    = extract_atm_straddle(chain, spot, short_dte)
-            atm_call_mid = _straddle["atm_call_mid"]
-            atm_put_mid  = _straddle["atm_put_mid"]
-
-            front_iv     = extract_front_iv(chain, short_dte)
-            long_chain   = get_option_chain(sym, long_exp)
-            long_dte     = _compute_dte(long_exp)
-            back_iv      = extract_front_iv(long_chain, long_dte)
-
-            _skew        = extract_skew_25d(chain, short_dte)
-            put_25d_iv   = _skew["put_25d_iv"]
-            call_25d_iv  = _skew["call_25d_iv"]
+            atm_call_mid, atm_put_mid = extract_atm_straddle(chain, spot, short_dte)
+            front_iv, back_iv         = extract_front_iv(chain, short_dte)
+            put_25d_iv, call_25d_iv   = extract_skew_25d(chain, short_dte)
 
             try:
                 from data_sources.massive_api import get_atr_14

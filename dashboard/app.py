@@ -685,7 +685,7 @@ def main():
     # ── Bottom panel: Trade Log + Backtest tabs ───────────────────────────────
     st.divider()
     st.markdown("## 🗂 Tools")
-    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab, scanner_tab = st.tabs([
+    pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab, scanner_tab, xsp_tab = st.tabs([
         "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest",
         "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data", "🔍 Deep ITM Scanner"
     ])
@@ -812,7 +812,12 @@ def main():
         _render_live_data_panel()
     with scanner_tab:
         _render_deep_itm_scanner_panel()
+    with xsp_tab:
+        _render_xsp_scanner_panel()
 
+
+if __name__ == "__main__":
+    main()
 
 
 # ─────────────────────────────────────────────
@@ -3377,6 +3382,7 @@ def _render_trade_log_section():
 def _render_roll_advisor_panel():
     """Live roll advisor — checks if a net-credit roll is available for open campaigns."""
     import os
+    from engine.assignment_guard import check_assignment_risk, detect_flip_opportunity, check_contract_scale
     from engine.roll_advisor import get_roll_advice
     from reports.report_generator import load_trade_log, log_trade, TradeLogEntry
 
@@ -3514,6 +3520,229 @@ def _render_roll_advisor_panel():
         m3.metric("Net if rolled now", f"${r.roll_credit_est:.2f}")
         st.info(f"Check back when the short decays more. Current basis: ${r.campaign_basis_before:.2f} ({r.recovery_pct_before:.1f}% recovered)")
 
+def _render_rescue_alert(result: dict):
+    """Render the assignment guard rescue panel."""
+    action    = result.get("primary_action","HOLD")
+    a_risk    = result.get("assignment_risk",{})
+    flip      = result.get("flip_opportunity",{})
+    scale     = result.get("scale_gate",{})
+    urgency   = a_risk.get("urgency","SAFE")
 
-if __name__ == "__main__":
-    main()
+    color_map = {"CRITICAL":"#FF4444","WARNING":"#FF8C00","MONITOR":"#FFD700","SAFE":"#00C853"}
+    color = color_map.get(urgency,"#888888")
+
+    st.markdown(f"""
+    <div style='border:2px solid {color};border-radius:8px;padding:14px;margin:8px 0'>
+    <b style='color:{color};font-size:16px'>⚠ ASSIGNMENT GUARD — {urgency}</b><br>
+    <b>Primary action:</b> {action}<br>
+    <b>Intrinsic:</b> ${a_risk.get('intrinsic',0):.2f} &nbsp;|&nbsp;
+    <b>Time value left:</b> ${a_risk.get('time_value',0):.2f} &nbsp;|&nbsp;
+    <b>Hours to act:</b> {a_risk.get('hours_to_act',0):.0f}h<br>
+    <b>Roll rec:</b> {a_risk.get('recommendation','')[:120]}
+    </div>""", unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Flip detector**")
+        if flip.get("viable"):
+            st.success(f"FLIP to {flip.get('flip_to')} — {flip.get('move_vs_atr',0):.1f}x ATR move")
+        else:
+            st.info(flip.get("reason","No flip signal")[:100])
+    with c2:
+        st.markdown("**Scale gate**")
+        if scale.get("approved"):
+            st.success(f"SCALE approved — safe: {scale.get('safe_contracts')} contracts")
+        else:
+            st.warning(scale.get("reason","Hold current size")[:100])
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# XSP SPREAD SCANNER PANEL (v55)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _render_xsp_scanner_panel() -> None:
+    """🛡 XSP Spread Scanner — cash-settled, no-assignment spread engine."""
+    import os
+    try:
+        import pandas as pd
+        _PD = True
+    except ImportError:
+        _PD = False
+
+    st.markdown("### 🛡 XSP Spread Scanner")
+    st.caption(
+        "Cash-settled · European exercise · No overnight assignment risk · "
+        "Section 1256 tax treatment. Scans XSP put/call credit and debit spreads."
+    )
+
+    # ── Inputs ────────────────────────────────────────────────────────────────
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        regime = st.selectbox(
+            "Regime",
+            ["PREMIUM_SELLING", "NEUTRAL_TIME_SPREADS", "TRENDING",
+             "LOW_VOL_EXPANSION", "HIGH_VOL_DEFENSE"],
+            index=0,
+        )
+    with col2:
+        account_cash = st.number_input("Account cash ($)", value=5000.0, step=100.0, min_value=0.0)
+    with col3:
+        open_risk = st.number_input("Open positions risk ($)", value=0.0, step=100.0, min_value=0.0)
+
+    xsp_spot = st.number_input("XSP spot price", value=695.0, step=0.5)
+
+    run = st.button("🔍 Scan XSP Spreads", type="primary", use_container_width=True)
+    if not run:
+        st.info("Configure inputs above and click Scan.")
+        return
+
+    # ── Regime routing ────────────────────────────────────────────────────────
+    from regime.regime_policy_adapter import run_xsp_credit_or_debit, xsp_credit_scanner_config, xsp_debit_scanner_config
+    from regime.regime_definitions import XSP_CREDIT_REGIMES, XSP_DEBIT_REGIMES
+    from scanner.xsp_credit_spread_scanner import scan_xsp_credit_spreads
+    from scanner.xsp_debit_spread_scanner import scan_xsp_debit_spreads
+    from allocation.capital_allocation_models import AllocationInput
+    from allocation.capital_allocation_engine import allocate_xsp_position
+    from lifecycle.xsp_spread_lifecycle_engine import evaluate_xsp_spread_lifecycle
+    from policy.xsp_policy_loader import load_xsp_policy
+
+    routing = run_xsp_credit_or_debit(regime)
+    policy  = load_xsp_policy(regime)
+
+    # ── Mock quotes from spot ─────────────────────────────────────────────────
+    # Build synthetic chain around spot for demo / live-wiring later
+    from scanner.deep_itm_entry_filters import OptionLegQuote
+
+    def _mock_put_chain(spot, n=10):
+        quotes = []
+        for i in range(n):
+            strike = round(spot + 5 + i, 1)
+            itm    = strike - spot
+            delta  = -min(0.99, 0.20 + i * 0.04)
+            mid    = round(itm + 0.40 + i * 0.05, 2)
+            quotes.append(OptionLegQuote(
+                symbol="XSP", option_type="PUT", expiry="2026-04-17",
+                strike=strike, bid=round(mid-0.05,2), ask=round(mid+0.05,2),
+                mid=mid, delta=delta, open_interest=500+i*50, volume=100,
+            ))
+            # Add dte attribute
+            quotes[-1].__dict__['dte'] = 3
+        return quotes
+
+    def _mock_call_chain(spot, n=10):
+        quotes = []
+        for i in range(n):
+            strike = round(spot - 5 - i, 1)
+            itm    = spot - strike
+            delta  = min(0.99, 0.20 + i * 0.04)
+            mid    = round(itm + 0.40 + i * 0.05, 2)
+            quotes.append(OptionLegQuote(
+                symbol="XSP", option_type="CALL", expiry="2026-04-17",
+                strike=strike, bid=round(mid-0.05,2), ask=round(mid+0.05,2),
+                mid=mid, delta=delta, open_interest=500+i*50, volume=100,
+            ))
+            quotes[-1].__dict__['dte'] = 3
+        return quotes
+
+    all_results = []
+
+    # ── Credit spreads ────────────────────────────────────────────────────────
+    if routing["run_credit"]:
+        cfg_c = xsp_credit_scanner_config(regime)
+        put_q = _mock_put_chain(xsp_spot)
+        call_q = _mock_call_chain(xsp_spot)
+        puts   = scan_xsp_credit_spreads("XSP", "PUT",  put_q,  75.0, cfg_c)
+        calls  = scan_xsp_credit_spreads("XSP", "CALL", call_q, 75.0, cfg_c)
+        for c in (puts + calls):
+            alloc = allocate_xsp_position(AllocationInput(
+                account_cash, regime, c.structure,
+                c.max_loss, open_risk
+            ))
+            all_results.append({
+                "structure": c.structure,
+                "short_strike": c.short_strike,
+                "long_strike": c.long_strike,
+                "expiry": c.expiry,
+                "credit": c.credit,
+                "width": c.width,
+                "max_loss": c.max_loss,
+                "cwr_%": round(c.credit_width_ratio * 100, 1),
+                "liq_score": c.liquidity_score,
+                "score": c.candidate_score,
+                "max_cts": alloc.max_contracts,
+                "allow": "✓" if alloc.allow_new_entries else "✗",
+                "type": "credit",
+            })
+
+    # ── Debit spreads ─────────────────────────────────────────────────────────
+    if routing["run_debit"]:
+        cfg_d = xsp_debit_scanner_config(regime)
+        put_q = _mock_put_chain(xsp_spot)
+        call_q = _mock_call_chain(xsp_spot)
+        puts  = scan_xsp_debit_spreads("XSP", "PUT",  put_q,  70.0, cfg_d)
+        calls = scan_xsp_debit_spreads("XSP", "CALL", call_q, 70.0, cfg_d)
+        for c in (puts + calls):
+            alloc = allocate_xsp_position(AllocationInput(
+                account_cash, regime, c.structure,
+                c.max_loss, open_risk
+            ))
+            all_results.append({
+                "structure": c.structure,
+                "long_strike": c.long_strike,
+                "short_strike": c.short_strike,
+                "expiry": c.expiry,
+                "debit": c.debit,
+                "width": c.width,
+                "max_profit": c.max_profit,
+                "max_loss": c.max_loss,
+                "rr": c.reward_risk,
+                "liq_score": c.liquidity_score,
+                "score": c.candidate_score,
+                "max_cts": alloc.max_contracts,
+                "allow": "✓" if alloc.allow_new_entries else "✗",
+                "type": "debit",
+            })
+
+    # ── Display ───────────────────────────────────────────────────────────────
+    if not all_results:
+        st.warning(f"No XSP candidates found for regime: {regime}")
+        return
+
+    all_results.sort(key=lambda x: x["score"], reverse=True)
+    st.success(f"✅ {len(all_results)} XSP candidates — regime: {regime}")
+
+    if _PD:
+        df = pd.DataFrame(all_results)
+        st.dataframe(df, use_container_width=True, height=300)
+    else:
+        for r in all_results[:5]:
+            with st.expander(f"#{all_results.index(r)+1} {r['structure']} — score {r['score']:.0f}"):
+                st.json(r)
+
+    # ── Top candidate lifecycle check ─────────────────────────────────────────
+    st.divider()
+    st.markdown("#### 📋 Lifecycle check on top candidate")
+    top = all_results[0]
+    current_pnl = st.slider("Current profit %", 0.0, 1.0, 0.35, 0.05)
+    current_dte = st.number_input("Current DTE", 0, 30, 4)
+    life = evaluate_xsp_spread_lifecycle(
+        "XSP", top["structure"], current_pnl, current_dte,
+        top.get("short_strike"), xsp_spot, top.get("width", 2.0) * 3
+    )
+    color = {"HOLD": "🟢", "HARVEST": "🟡", "FORCE_CLOSE": "🔴"}.get(life.state, "⚪")
+    st.markdown(f"**{color} {life.state}** — {life.reason}")
+    st.caption(f"Urgency: {life.urgency} | Action: {life.action}")
+
+    # ── Allocation summary ────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### 💰 Position sizing")
+    top_alloc = allocate_xsp_position(AllocationInput(
+        account_cash, regime,
+        top["structure"], top.get("max_loss", 100.0), open_risk
+    ))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Max contracts", top_alloc.max_contracts)
+    c2.metric("Max risk $", f"${top_alloc.max_risk_dollars:,.0f}")
+    c3.metric("Allow entry", "YES" if top_alloc.allow_new_entries else "NO")
+    st.caption(top_alloc.reason)

@@ -1,0 +1,1 @@
+timestamp,run_id,event_type,symbol,strategy,decision,action,score,vga_environment,regime_name,regime_confidence,spot,expected_move,upper_em,lower_em,short_strike,long_strike,short_dte,long_dte,entry_credit,entry_debit,current_debit_to_close,current_value,max_profit,max_loss,target_exit,stop_level,contracts,risk_dollars,pnl_estimate,reject_reason,notes,payload_json

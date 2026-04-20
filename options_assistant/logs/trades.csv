@@ -1,0 +1,1 @@
+timestamp,symbol,strategy,score,decision,bias,spot,upper_em,lower_em,gamma_regime,iv_regime,term_structure,short_strike,long_strike,short_dte,long_dte,entry_credit,entry_debit,max_profit,max_loss,target_exit,stop_level,contracts,rationale

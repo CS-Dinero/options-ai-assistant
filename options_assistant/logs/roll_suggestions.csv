@@ -1,0 +1,1 @@
+timestamp,symbol,strategy,action,urgency,current_spot,short_strike,long_strike,short_dte,long_dte,expected_move,target_short_strike,target_long_strike,target_short_dte,target_long_dte,rationale,notes

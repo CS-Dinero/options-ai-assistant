@@ -185,3 +185,48 @@ def get_roll_advice(
         recommendation=rec,
         action=action,
     )
+
+
+# ── Assignment guard integration ───────────────────────────────────────────────
+def check_position_rescue(
+    symbol: str,
+    option_type: str,
+    short_strike: float,
+    short_expiry: str,
+    short_dte: int,
+    short_delta: float,
+    short_mid: float,
+    long_strike: float,
+    spot_price: float,
+    atr: float,
+    move_today: float,
+    opposite_strike: float,
+    opposite_expiry: str,
+    opposite_mid: float,
+    roll_credit_est: float,
+    contracts: int,
+    entry_debit: float,
+    total_credits: float,
+    total_costs: float,
+    account_cash: float,
+) -> dict:
+    """
+    Wrapper that calls full_rescue_check and returns a dashboard-ready summary.
+    Wire this into the roll advisor panel for live rescue alerts.
+    """
+    from engine.assignment_guard import full_rescue_check
+    width = abs(short_strike - long_strike)
+    result = full_rescue_check(
+        symbol=symbol, option_type=option_type,
+        short_strike=short_strike, short_expiry=short_expiry,
+        short_dte=short_dte, short_delta=short_delta,
+        short_mid=short_mid, spot_price=spot_price,
+        atr=atr, move_today=move_today,
+        opposite_strike=opposite_strike, opposite_expiry=opposite_expiry,
+        opposite_mid=opposite_mid, roll_credit_per_contract=roll_credit_est,
+        current_contracts=contracts, proposed_contracts=contracts + 2,
+        spread_width=width, entry_debit=entry_debit,
+        total_credits=total_credits, total_costs=total_costs,
+        account_cash=account_cash,
+    )
+    return result
