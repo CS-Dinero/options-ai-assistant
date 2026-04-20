@@ -3611,30 +3611,39 @@ def _render_xsp_scanner_panel() -> None:
     from scanner.deep_itm_entry_filters import OptionLegQuote
 
     def _mock_put_chain(spot, n=10):
+        import datetime
+        exp_date = (datetime.date.today() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
         quotes = []
-        for i in range(n):
-            strike = round(spot + 5 + i, 1)
-            itm    = strike - spot
-            delta  = -min(0.99, 0.20 + i * 0.04)
-            mid    = round(itm + 0.40 + i * 0.05, 2)
+        # Realistic XSP OTM put chain — sharp premium dropoff as strikes go further OTM
+        _mids   = [0.55, 0.20, 0.12, 0.07, 0.04, 0.03, 0.02, 0.01, 0.01, 0.01]
+        _deltas = [-0.25,-0.18,-0.12,-0.08,-0.05,-0.04,-0.03,-0.02,-0.02,-0.01]
+        for i in range(min(n, len(_mids))):
+            strike = round(spot - 1.0 - i * 0.5, 1)
+            mid    = _mids[i]
+            delta  = _deltas[i]
             quotes.append(OptionLegQuote(
-                symbol="XSP", option_type="PUT", expiry="2026-04-17",
-                strike=strike, bid=round(mid-0.05,2), ask=round(mid+0.05,2),
-                mid=mid, delta=delta, open_interest=500+i*50, volume=100, dte=3,
+                symbol="XSP", option_type="PUT", expiry=exp_date,
+                strike=strike, bid=round(mid-0.03,2), ask=round(mid+0.03,2),
+                mid=mid, delta=delta, open_interest=800, volume=300,
+                dte=7,
             ))
-        return quotes
+            
 
     def _mock_call_chain(spot, n=10):
+        import datetime
+        exp_date = (datetime.date.today() + datetime.timedelta(days=7)).strftime("%Y-%m-%d")
         quotes = []
-        for i in range(n):
-            strike = round(spot - 5 - i, 1)
-            itm    = spot - strike
-            delta  = min(0.99, 0.20 + i * 0.04)
-            mid    = round(itm + 0.40 + i * 0.05, 2)
+        _mids   = [0.55, 0.20, 0.12, 0.07, 0.04, 0.03, 0.02, 0.01, 0.01, 0.01]
+        _deltas = [0.25, 0.18, 0.12, 0.08, 0.05, 0.04, 0.03, 0.02, 0.02, 0.01]
+        for i in range(min(n, len(_mids))):
+            strike = round(spot + 1.0 + i * 0.5, 1)
+            mid    = _mids[i]
+            delta  = _deltas[i]
             quotes.append(OptionLegQuote(
-                symbol="XSP", option_type="CALL", expiry="2026-04-17",
-                strike=strike, bid=round(mid-0.05,2), ask=round(mid+0.05,2),
-                mid=mid, delta=delta, open_interest=500+i*50, volume=100, dte=3,
+                symbol="XSP", option_type="CALL", expiry=exp_date,
+                strike=strike, bid=round(mid-0.03,2), ask=round(mid+0.03,2),
+                mid=mid, delta=delta, open_interest=800, volume=300,
+                dte=7,
             ))
         return quotes
 
@@ -3643,6 +3652,7 @@ def _render_xsp_scanner_panel() -> None:
     # ── Credit spreads ────────────────────────────────────────────────────────
     if routing["run_credit"]:
         cfg_c = xsp_credit_scanner_config(regime)
+        cfg_c.spread_widths = (0.5, 1.0, 2.0)
         put_q = _mock_put_chain(xsp_spot)
         call_q = _mock_call_chain(xsp_spot)
         puts   = scan_xsp_credit_spreads("XSP", "PUT",  put_q,  75.0, cfg_c)
