@@ -3620,10 +3620,8 @@ def _render_xsp_scanner_panel() -> None:
             quotes.append(OptionLegQuote(
                 symbol="XSP", option_type="PUT", expiry="2026-04-17",
                 strike=strike, bid=round(mid-0.05,2), ask=round(mid+0.05,2),
-                mid=mid, delta=delta, open_interest=500+i*50, volume=100,
+                mid=mid, delta=delta, open_interest=500+i*50, volume=100, dte=3,
             ))
-            # Add dte attribute
-            quotes[-1].dte = 3
         return quotes
 
     def _mock_call_chain(spot, n=10):
@@ -3636,9 +3634,8 @@ def _render_xsp_scanner_panel() -> None:
             quotes.append(OptionLegQuote(
                 symbol="XSP", option_type="CALL", expiry="2026-04-17",
                 strike=strike, bid=round(mid-0.05,2), ask=round(mid+0.05,2),
-                mid=mid, delta=delta, open_interest=500+i*50, volume=100,
+                mid=mid, delta=delta, open_interest=500+i*50, volume=100, dte=3,
             ))
-            quotes[-1].dte = 3
         return quotes
 
     all_results = []
