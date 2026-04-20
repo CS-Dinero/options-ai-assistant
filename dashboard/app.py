@@ -687,7 +687,7 @@ def main():
     st.markdown("## 🗂 Tools")
     pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab, scanner_tab, xsp_tab = st.tabs([
         "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest",
-        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data", "🔍 Deep ITM Scanner", "⚡ XSP Spreads"
+        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data", "🔍 Deep ITM Scanner"
     ])
 
     with pos_tab:
@@ -814,6 +814,10 @@ def main():
         _render_deep_itm_scanner_panel()
     with xsp_tab:
         _render_xsp_scanner_panel()
+
+
+if __name__ == "__main__":
+    main()
 
 
 # ─────────────────────────────────────────────
@@ -3742,7 +3746,3 @@ def _render_xsp_scanner_panel() -> None:
     c2.metric("Max risk $", f"${top_alloc.max_risk_dollars:,.0f}")
     c3.metric("Allow entry", "YES" if top_alloc.allow_new_entries else "NO")
     st.caption(top_alloc.reason)
-
-
-if __name__ == "__main__":
-    main()

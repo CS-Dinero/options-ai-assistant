@@ -1,7 +1,8 @@
-"""policy/xsp_policy_validator.py — Validate policy values are in range."""
+"""policy/xsp_policy_validator.py — Validate XSP policy values."""
+from __future__ import annotations
 from policy.xsp_strategy_policy import XSPStrategyPolicy
 
-def validate_xsp_policy(p: XSPStrategyPolicy) -> list[str]:
+def validate_xsp_policy(p: XSPStrategyPolicy) -> tuple[bool, list[str]]:
     errors = []
     if not (0 < p.credit_short_delta_min < p.credit_short_delta_max < 1):
         errors.append("credit delta range invalid")
@@ -13,4 +14,4 @@ def validate_xsp_policy(p: XSPStrategyPolicy) -> list[str]:
         errors.append("max_contracts_cap must be >= 1")
     if not (0 < p.max_risk_per_trade_pct < 1):
         errors.append("max_risk_per_trade_pct out of range")
-    return errors
+    return (len(errors) == 0, errors)
