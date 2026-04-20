@@ -3627,7 +3627,7 @@ def _render_xsp_scanner_panel() -> None:
                 mid=mid, delta=delta, open_interest=800, volume=300,
                 dte=7,
             ))
-            
+        return quotes
 
     def _mock_call_chain(spot, n=10):
         import datetime
