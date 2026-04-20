@@ -687,7 +687,7 @@ def main():
     st.markdown("## 🗂 Tools")
     pos_tab, tlog_tab, bt_tab, analytics_tab, portfolio_tab, optimizer_tab, gov_tab, sys_tab, live_tab, scanner_tab, xsp_tab = st.tabs([
         "📍 Positions", "📋 Trade Log & Export", "🔬 Backtest",
-        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data", "🔍 Deep ITM Scanner"
+        "📈 Analytics", "🗃 Portfolio", "🧠 Optimizer", "🛡 Governance", "⚙️ System", "📡 Live Data", "🔍 Deep ITM Scanner", "⚡ XSP Spreads"
     ])
 
     with pos_tab:
