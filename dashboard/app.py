@@ -816,10 +816,6 @@ def main():
         _render_xsp_scanner_panel()
 
 
-if __name__ == "__main__":
-    main()
-
-
 # ─────────────────────────────────────────────
 # TRADE LOG PANEL
 # ─────────────────────────────────────────────
@@ -3746,3 +3742,7 @@ def _render_xsp_scanner_panel() -> None:
     c2.metric("Max risk $", f"${top_alloc.max_risk_dollars:,.0f}")
     c3.metric("Allow entry", "YES" if top_alloc.allow_new_entries else "NO")
     st.caption(top_alloc.reason)
+
+
+if __name__ == "__main__":
+    main()
